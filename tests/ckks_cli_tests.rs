@@ -1,7 +1,7 @@
 use std::process::Command;
 
 fn run_ckks_demo(args: &[&str]) -> String {
-    let exe = env!("CARGO_BIN_EXE_ckks_ntt");
+    let exe = env!("CARGO_BIN_EXE_ntt_resilience");
     let output = Command::new(exe)
         .args(args)
         .output()

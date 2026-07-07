@@ -1,5 +1,8 @@
+mod batch_matrix;
 mod ckks;
 mod fault;
+mod fhe_backend;
+mod linear_operator;
 mod metrics;
 mod mitigation;
 mod modarith;
