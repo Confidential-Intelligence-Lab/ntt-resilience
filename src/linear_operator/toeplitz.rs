@@ -15,6 +15,7 @@ use super::subring::SubringPolynomial;
 pub struct ToeplitzOperator<T> {
     d: usize,
     blocks: Vec<SubringPolynomial<T>>,
+    generator: Option<SubringPolynomial<T>>,
 }
 
 impl<T> ToeplitzOperator<T>
@@ -38,7 +39,23 @@ where
             "Toeplitz operator must contain exactly d blocks"
         );
 
-        Self { d, blocks }
+        Self {
+            d,
+            blocks,
+            generator: None,
+        }
+    }
+
+    pub fn from_generator(d: usize, generator: SubringPolynomial<T>) -> Self {
+        Self {
+            d,
+            blocks: Vec::new(),
+            generator: Some(generator),
+        }
+    }
+
+    pub fn generator(&self) -> Option<&SubringPolynomial<T>> {
+        self.generator.as_ref()
     }
 
     /// Number of block rows/columns.
@@ -127,5 +144,15 @@ mod tests {
         let output = operator.apply(&input);
 
         assert_eq!(output, input);
+    }
+
+    #[test]
+    fn generator_constructor_preserves_polynomial() {
+        let poly = SubringPolynomial::new(vec![1_i64, 2, 3]);
+
+        let toep = ToeplitzOperator::from_generator(4, poly.clone());
+
+        assert_eq!(toep.d(), 4);
+        assert_eq!(toep.generator(), Some(&poly));
     }
 }
