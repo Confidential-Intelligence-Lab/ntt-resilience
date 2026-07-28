@@ -17,7 +17,15 @@ pub struct ToeplitzOperator<T> {
     blocks: Vec<SubringPolynomial<T>>,
 }
 
-impl<T> ToeplitzOperator<T> {
+impl<T> ToeplitzOperator<T>
+where
+    T: Clone
+        + Default
+        + std::ops::Mul<Output = T>
+        + std::ops::Add<Output = T>
+        + std::ops::AddAssign
+        + std::ops::SubAssign,
+{
     /// Constructs a Toeplitz operator from its block representation.
     ///
     /// # Panics
@@ -41,6 +49,38 @@ impl<T> ToeplitzOperator<T> {
     /// Immutable access to the block polynomials.
     pub fn blocks(&self) -> &[SubringPolynomial<T>] {
         &self.blocks
+    }
+
+    /// Applies the Toeplitz operator to a vector of subring polynomials.
+    ///
+    /// The operator is interpreted as a block-circulant matrix whose first
+    /// column is given by `self.blocks`.
+    pub fn apply(&self, input: &[SubringPolynomial<T>]) -> Vec<SubringPolynomial<T>> {
+        assert_eq!(
+            input.len(),
+            self.d,
+            "input vector must contain exactly d subring polynomials"
+        );
+
+        let mut output = Vec::with_capacity(self.d);
+
+        for row in 0..self.d {
+            let mut accum: Option<SubringPolynomial<T>> = None;
+
+            for (col, polynomial) in input.iter().enumerate() {
+                let block = &self.blocks[(row + self.d - col) % self.d];
+                let product = block.negacyclic_mul(polynomial);
+
+                accum = Some(match accum {
+                    Some(sum) => sum.add(&product),
+                    None => product,
+                });
+            }
+
+            output.push(accum.expect("d must be positive"));
+        }
+
+        output
     }
 }
 
@@ -69,5 +109,23 @@ mod tests {
         let blocks = vec![SubringPolynomial::new(vec![1u64, 2])];
 
         let _ = ToeplitzOperator::new(3, blocks);
+    }
+
+    #[test]
+    fn identity_operator_returns_input() {
+        let one = SubringPolynomial::new(vec![1_i64, 0]);
+        let zero = SubringPolynomial::new(vec![0_i64, 0]);
+
+        let operator = ToeplitzOperator::new(3, vec![one.clone(), zero.clone(), zero.clone()]);
+
+        let input = vec![
+            SubringPolynomial::new(vec![2_i64, 3]),
+            SubringPolynomial::new(vec![4_i64, 5]),
+            SubringPolynomial::new(vec![6_i64, 7]),
+        ];
+
+        let output = operator.apply(&input);
+
+        assert_eq!(output, input);
     }
 }
