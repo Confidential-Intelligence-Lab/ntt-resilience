@@ -47,6 +47,27 @@ impl<T> SubringPolynomial<T> {
     pub fn into_coefficients(self) -> Vec<T> {
         self.coeffs
     }
+
+    /// Multiplies this polynomial by `Y` modulo `Y^k + 1`.
+    ///
+    /// Since `Y^k = -1`, the highest-degree coefficient wraps to the
+    /// constant term with a sign change.
+    pub fn mul_by_y(&self) -> Self
+    where
+        T: Clone + Default + std::ops::Neg<Output = T>,
+    {
+        let mut coeffs = vec![T::default(); self.k()];
+
+        coeffs[0] = -self.coeffs[self.k() - 1].clone();
+
+        let k = self.k();
+        let mut coeffs = vec![T::default(); k];
+
+        coeffs[0] = -self.coeffs[k - 1].clone();
+        coeffs[1..k].clone_from_slice(&self.coeffs[..k - 1]);
+
+        Self::new(coeffs)
+    }
 }
 
 impl<T> SubringPolynomial<T>
@@ -292,5 +313,23 @@ mod tests {
         let recovered = dec.compose(&dec.decompose(&coeffs));
 
         assert_eq!(recovered, coeffs);
+    }
+
+    #[test]
+    fn multiplication_by_y_shifts_coefficients_negacyclically() {
+        let polynomial = SubringPolynomial::new(vec![1_i64, 2, 3, 4]);
+
+        let product = polynomial.mul_by_y();
+
+        assert_eq!(product.coefficients(), &[-4, 1, 2, 3]);
+    }
+
+    #[test]
+    fn multiplication_by_y_respects_y_to_the_k_equals_minus_one() {
+        let y_cubed = SubringPolynomial::new(vec![0_i64, 0, 0, 1]);
+
+        let product = y_cubed.mul_by_y();
+
+        assert_eq!(product.coefficients(), &[-1, 0, 0, 0]);
     }
 }
