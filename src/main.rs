@@ -354,13 +354,6 @@ fn validate_ckks_demo_behavior(
         None
     };
 
-    if fault && fault_injections == 0 {
-        return Err(
-            "validation failed: fault was requested but no injection matched the execution"
-                .to_string(),
-        );
-    }
-
     if !fault && fault_injections != 0 {
         return Err(
             "validation failed: fault injection occurred without a requested fault".to_string(),
@@ -375,7 +368,11 @@ fn validate_ckks_demo_behavior(
     }
 
     Ok(CkksValidationReport {
-        execution_valid: true,
+        // A requested fault that matched no execution event is not an
+        // admissible injection experiment, but it is not a program failure.
+        // Preserve it as a structured validation result so campaign tooling
+        // can distinguish unmatched coordinates from genuine execution errors.
+        execution_valid: !(fault && fault_injections == 0),
         fault_enabled: fault,
         fault_injections,
         golden_match,
@@ -443,14 +440,15 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_requested_but_unmatched_fault() {
-        let err = validate_ckks_demo_behavior(true, 0, &golden_metrics())
-            .expect_err("requested fault with zero injections must fail validation");
+    fn validation_classifies_requested_but_unmatched_fault_as_invalid_experiment() {
+        let report = validate_ckks_demo_behavior(true, 0, &golden_metrics())
+            .expect("unmatched fault request should produce a validation report");
 
-        assert!(
-            err.contains("no injection matched"),
-            "unexpected validation error: {err}"
-        );
+        assert!(!report.execution_valid);
+        assert!(report.fault_enabled);
+        assert_eq!(report.fault_injections, 0);
+        assert!(report.golden_match);
+        assert_eq!(report.fault_observed, None);
     }
 
     #[test]
