@@ -65,18 +65,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "ckks_ntt"
-version = "0.5.0"
-dependencies = [
- "clap",
- "num-complex",
- "rand",
- "rand_chacha",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "clap"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -162,6 +150,18 @@ name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
+
+[[package]]
+name = "ntt_resilience"
+version = "0.5.0"
+dependencies = [
+ "clap",
+ "num-complex",
+ "rand",
+ "rand_chacha",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "num-complex"

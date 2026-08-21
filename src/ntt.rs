@@ -612,25 +612,9 @@ pub fn ntt_with_impl_and_mitigation(
     mitigation_metrics: &mut MitigationMetrics,
     fault: Option<&FaultSpec>,
 ) -> Result<(Vec<u64>, Vec<StageTrace>), String> {
-    let mut faulted_input;
-    let input_for_transform = if let Some(f) = fault {
-        if f.site == FaultSite::Input && f.slot < a.len() {
-            faulted_input = a.to_vec();
-            if f.bit < 64 {
-                faulted_input[f.slot] =
-                    flip_fault_value(faulted_input[f.slot], params.modulus, f.bit, f.adjacent);
-            }
-            &faulted_input
-        } else {
-            a
-        }
-    } else {
-        a
-    };
-
-    if implementation == NttImplementation::Radix2 && mitigation.enabled() {
+    if implementation == NttImplementation::Radix2 {
         Ok(transform_radix2_mitigated(
-            input_for_transform,
+            a,
             params,
             false,
             trace,
@@ -640,15 +624,7 @@ pub fn ntt_with_impl_and_mitigation(
             mitigation_metrics,
         ))
     } else {
-        transform_with_impl(
-            input_for_transform,
-            params,
-            false,
-            trace,
-            None,
-            implementation,
-            metrics,
-        )
+        transform_with_impl(a, params, false, trace, fault, implementation, metrics)
     }
 }
 
@@ -662,25 +638,9 @@ pub fn intt_with_impl_and_mitigation(
     mitigation_metrics: &mut MitigationMetrics,
     fault: Option<&FaultSpec>,
 ) -> Result<(Vec<u64>, Vec<StageTrace>), String> {
-    let mut faulted_input;
-    let input_for_transform = if let Some(f) = fault {
-        if f.site == FaultSite::Input && f.slot < a.len() {
-            faulted_input = a.to_vec();
-            if f.bit < 64 {
-                faulted_input[f.slot] =
-                    flip_fault_value(faulted_input[f.slot], params.modulus, f.bit, f.adjacent);
-            }
-            &faulted_input
-        } else {
-            a
-        }
-    } else {
-        a
-    };
-
-    if implementation == NttImplementation::Radix2 && mitigation.enabled() {
+    if implementation == NttImplementation::Radix2 {
         Ok(transform_radix2_mitigated(
-            input_for_transform,
+            a,
             params,
             true,
             trace,
@@ -690,15 +650,7 @@ pub fn intt_with_impl_and_mitigation(
             mitigation_metrics,
         ))
     } else {
-        transform_with_impl(
-            input_for_transform,
-            params,
-            true,
-            trace,
-            None,
-            implementation,
-            metrics,
-        )
+        transform_with_impl(a, params, true, trace, fault, implementation, metrics)
     }
 }
 
@@ -981,15 +933,66 @@ fn transform_radix2(
     (a, traces)
 }
 
-fn inject_arithmetic_site_value(
+/// Apply arithmetic-site faults and report how many requested injections
+/// actually matched this execution point.
+fn inject_arithmetic_site_value_counted(
     value: u64,
     q: u64,
     stage: usize,
     slot: usize,
     fault: Option<&FaultSpec>,
     site: FaultSite,
+) -> (u64, u64) {
+    let mut out = value;
+    let mut injections = 0u64;
+
+    if let Some(f) = fault {
+        if f.site == site && f.stage == stage && f.slot == slot {
+            out = flip_fault_value(out, q, f.bit, f.adjacent);
+            injections += 1;
+        }
+
+        if f.second_enabled
+            && f.second_site == site
+            && f.second_stage == stage
+            && f.second_slot == slot
+        {
+            out = flip_fault_value(out, q, f.second_bit, f.second_adjacent);
+            injections += 1;
+        }
+    }
+
+    (out, injections)
+}
+
+/// Apply input-site faults for one stage and report the number of actual
+/// injections. This preserves the existing helper used by other NTT paths.
+fn apply_input_faults_for_stage_counted(
+    a: &mut [u64],
+    q: u64,
+    stage: usize,
+    fault: Option<&FaultSpec>,
 ) -> u64 {
-    maybe_flip_fault_value_for_site(value, q, stage, slot, fault, site)
+    let mut injections = 0u64;
+
+    if let Some(f) = fault {
+        if f.site == FaultSite::Input && f.stage == stage && f.slot < a.len() {
+            a[f.slot] = flip_fault_value(a[f.slot], q, f.bit, f.adjacent);
+            injections += 1;
+        }
+
+        if f.second_enabled
+            && f.second_site == FaultSite::Input
+            && f.second_stage == stage
+            && f.second_slot < a.len()
+        {
+            a[f.second_slot] =
+                flip_fault_value(a[f.second_slot], q, f.second_bit, f.second_adjacent);
+            injections += 1;
+        }
+    }
+
+    injections
 }
 
 fn transform_radix2_mitigated(
@@ -1032,12 +1035,14 @@ fn transform_radix2_mitigated(
         let mut before = a.clone();
         let mut faulted = false;
 
-        if apply_input_faults_for_stage(&mut a, q, stage, fault) {
+        let input_injections = apply_input_faults_for_stage_counted(&mut a, q, stage, fault);
+        if input_injections > 0 {
+            mitigation_metrics.fault_injections += input_injections;
             before = a.clone();
             faulted = true;
             if let Some(m) = &mut metrics {
-                m.num_memory_reads += 1;
-                m.num_memory_writes += 1;
+                m.num_memory_reads += input_injections;
+                m.num_memory_writes += input_injections;
             }
         }
 
@@ -1056,7 +1061,7 @@ fn transform_radix2_mitigated(
                 let b = a[hi];
 
                 let wb_clean = mul_mod(b, w, q);
-                let wb = inject_arithmetic_site_value(
+                let (wb, injected) = inject_arithmetic_site_value_counted(
                     wb_clean,
                     q,
                     stage,
@@ -1064,12 +1069,13 @@ fn transform_radix2_mitigated(
                     fault,
                     FaultSite::MulOutput,
                 );
+                mitigation_metrics.fault_injections += injected;
 
                 let expected_y0 = add_mod(u, wb_clean, q);
                 let expected_y1 = sub_mod(u, wb_clean, q);
 
                 let y0_clean = add_mod(u, wb, q);
-                let mut y0 = inject_arithmetic_site_value(
+                let (mut y0, injected) = inject_arithmetic_site_value_counted(
                     y0_clean,
                     q,
                     stage,
@@ -1077,7 +1083,8 @@ fn transform_radix2_mitigated(
                     fault,
                     FaultSite::AddOutput,
                 );
-                y0 = inject_arithmetic_site_value(
+                mitigation_metrics.fault_injections += injected;
+                let (next_y0, injected) = inject_arithmetic_site_value_counted(
                     y0,
                     q,
                     stage,
@@ -1085,11 +1092,21 @@ fn transform_radix2_mitigated(
                     fault,
                     FaultSite::ButterflyOutput,
                 );
-                y0 =
-                    inject_arithmetic_site_value(y0, q, stage, lo, fault, FaultSite::RegisterWrite);
+                y0 = next_y0;
+                mitigation_metrics.fault_injections += injected;
+                let (next_y0, injected) = inject_arithmetic_site_value_counted(
+                    y0,
+                    q,
+                    stage,
+                    lo,
+                    fault,
+                    FaultSite::RegisterWrite,
+                );
+                y0 = next_y0;
+                mitigation_metrics.fault_injections += injected;
 
                 let y1_clean = sub_mod(u, wb, q);
-                let mut y1 = inject_arithmetic_site_value(
+                let (mut y1, injected) = inject_arithmetic_site_value_counted(
                     y1_clean,
                     q,
                     stage,
@@ -1097,7 +1114,8 @@ fn transform_radix2_mitigated(
                     fault,
                     FaultSite::SubOutput,
                 );
-                y1 = inject_arithmetic_site_value(
+                mitigation_metrics.fault_injections += injected;
+                let (next_y1, injected) = inject_arithmetic_site_value_counted(
                     y1,
                     q,
                     stage,
@@ -1105,8 +1123,18 @@ fn transform_radix2_mitigated(
                     fault,
                     FaultSite::ButterflyOutput,
                 );
-                y1 =
-                    inject_arithmetic_site_value(y1, q, stage, hi, fault, FaultSite::RegisterWrite);
+                y1 = next_y1;
+                mitigation_metrics.fault_injections += injected;
+                let (next_y1, injected) = inject_arithmetic_site_value_counted(
+                    y1,
+                    q,
+                    stage,
+                    hi,
+                    fault,
+                    FaultSite::RegisterWrite,
+                );
+                y1 = next_y1;
+                mitigation_metrics.fault_injections += injected;
 
                 if y0 != expected_y0 || y1 != expected_y1 {
                     faulted = true;

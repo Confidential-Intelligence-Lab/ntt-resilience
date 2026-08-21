@@ -298,7 +298,8 @@ fn main() -> Result<(), String> {
             print_ckks_trace(&result.trace, print_slots);
 
             if validate {
-                let report = validate_ckks_demo_behavior(fault, &result.metrics)?;
+                let report =
+                    validate_ckks_demo_behavior(fault, result.fault_injections, &result.metrics)?;
                 print_ckks_validation_report(&report);
             }
         }
@@ -336,39 +337,50 @@ fn print_system_metrics(metrics: &crate::ntt::NttSystemMetrics) {
 struct CkksValidationReport {
     execution_valid: bool,
     fault_enabled: bool,
+    fault_injections: u64,
     golden_match: bool,
     fault_observed: Option<bool>,
 }
 
 fn validate_ckks_demo_behavior(
     fault: bool,
+    fault_injections: u64,
     metrics: &crate::metrics::DecodedMetrics,
 ) -> Result<CkksValidationReport, String> {
     let golden_match = metrics.max_abs_error == 0.0 && metrics.rms_error == 0.0;
-    let fault_observed = if fault { Some(!golden_match) } else { None };
-
-    let report = CkksValidationReport {
-        execution_valid: true,
-        fault_enabled: fault,
-        golden_match,
-        fault_observed,
+    let fault_observed = if fault && fault_injections > 0 {
+        Some(!golden_match)
+    } else {
+        None
     };
 
-    if fault {
-        if fault_observed != Some(true) {
-            return Err(
-                "validation failed: fault was enabled but no decoded-domain effect was observed"
-                    .to_string(),
-            );
-        }
-    } else if !golden_match {
+    if fault && fault_injections == 0 {
+        return Err(
+            "validation failed: fault was requested but no injection matched the execution"
+                .to_string(),
+        );
+    }
+
+    if !fault && fault_injections != 0 {
+        return Err(
+            "validation failed: fault injection occurred without a requested fault".to_string(),
+        );
+    }
+
+    if !fault && !golden_match {
         return Err(
             "validation failed: no fault was enabled but decoded output differs from golden output"
                 .to_string(),
         );
     }
 
-    Ok(report)
+    Ok(CkksValidationReport {
+        execution_valid: true,
+        fault_enabled: fault,
+        fault_injections,
+        golden_match,
+        fault_observed,
+    })
 }
 
 fn pass_fail(x: bool) -> &'static str {
@@ -383,10 +395,85 @@ fn print_ckks_validation_report(report: &CkksValidationReport) {
     println!("================ CKKS Demo Validation ================");
     println!("Execution valid: {}", pass_fail(report.execution_valid));
     println!("Fault enabled:   {}", report.fault_enabled);
+    println!("Fault injections: {}", report.fault_injections);
     println!("Golden match:    {}", pass_fail(report.golden_match));
     match report.fault_observed {
         Some(x) => println!("Fault observed:  {}", pass_fail(x)),
         None => println!("Fault observed:  N/A"),
     }
     println!("======================================================");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn golden_metrics() -> crate::metrics::DecodedMetrics {
+        crate::metrics::DecodedMetrics {
+            slot_count: 1,
+            max_abs_error: 0.0,
+            mean_abs_error: 0.0,
+            rms_error: 0.0,
+            relative_l2_error: 0.0,
+            snr_db: f64::INFINITY,
+        }
+    }
+
+    fn observable_metrics() -> crate::metrics::DecodedMetrics {
+        crate::metrics::DecodedMetrics {
+            slot_count: 1,
+            max_abs_error: 1.0,
+            mean_abs_error: 1.0,
+            rms_error: 1.0,
+            relative_l2_error: 1.0,
+            snr_db: 0.0,
+        }
+    }
+
+    #[test]
+    fn validation_accepts_no_fault_golden_execution() {
+        let report = validate_ckks_demo_behavior(false, 0, &golden_metrics())
+            .expect("no-fault golden execution should validate");
+
+        assert!(report.execution_valid);
+        assert!(!report.fault_enabled);
+        assert_eq!(report.fault_injections, 0);
+        assert!(report.golden_match);
+        assert_eq!(report.fault_observed, None);
+    }
+
+    #[test]
+    fn validation_rejects_requested_but_unmatched_fault() {
+        let err = validate_ckks_demo_behavior(true, 0, &golden_metrics())
+            .expect_err("requested fault with zero injections must fail validation");
+
+        assert!(
+            err.contains("no injection matched"),
+            "unexpected validation error: {err}"
+        );
+    }
+
+    #[test]
+    fn validation_accepts_injected_but_masked_fault() {
+        let report = validate_ckks_demo_behavior(true, 1, &golden_metrics())
+            .expect("injected but masked fault is a valid experiment");
+
+        assert!(report.execution_valid);
+        assert!(report.fault_enabled);
+        assert_eq!(report.fault_injections, 1);
+        assert!(report.golden_match);
+        assert_eq!(report.fault_observed, Some(false));
+    }
+
+    #[test]
+    fn validation_accepts_injected_and_observable_fault() {
+        let report = validate_ckks_demo_behavior(true, 1, &observable_metrics())
+            .expect("observable injected fault should validate");
+
+        assert!(report.execution_valid);
+        assert!(report.fault_enabled);
+        assert_eq!(report.fault_injections, 1);
+        assert!(!report.golden_match);
+        assert_eq!(report.fault_observed, Some(true));
+    }
 }
