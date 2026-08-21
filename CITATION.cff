@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying FDTC 2026 paper."
+title: "ntt-resilience"
+type: software
+
+authors:
+  - family-names: "Liu"
+    given-names: "Brittany"
+  - family-names: "Wang"
+    given-names: "Caroline"
+  - family-names: "Chowdhury"
+    given-names: "Jayanta"
+  - family-names: "Nunes"
+    given-names: "Igor"
+  - family-names: "Farhady"
+    given-names: "Nahid"
+  - family-names: "Kavun"
+    given-names: "Elif Bilge"
+  - family-names: "Cammarota"
+    given-names: "Ro"
+
+repository-code: "https://github.com/Confidential-Intelligence-Lab/ntt-resilience"
+
+preferred-citation:
+  type: conference-paper
+  title: "Short Paper: Structure-Aware Software Resilience for Number Theoretic Transforms"
+  authors:
+    - family-names: "Liu"
+      given-names: "Brittany"
+    - family-names: "Wang"
+      given-names: "Caroline"
+    - family-names: "Chowdhury"
+      given-names: "Jayanta"
+    - family-names: "Nunes"
+      given-names: "Igor"
+    - family-names: "Farhady"
+      given-names: "Nahid"
+    - family-names: "Kavun"
+      given-names: "Elif Bilge"
+    - family-names: "Cammarota"
+      given-names: "Ro"
+  year: 2026
