@@ -21,6 +21,7 @@ def parse(out,err,code):
     txt=out+"\n"+err
     pats={
       "execution_valid":r"Execution valid:\s*([A-Za-z/]+)",
+      "fault_injections":r"Fault injections:\s*([0-9]+)",
       "golden_match":r"Golden match:\s*([A-Za-z/]+)",
       "fault_observed":r"Fault observed:\s*([A-Za-z/]+)",
       "rms_error":r"RMS error:\s*([-+0-9.eE]+)",
@@ -44,7 +45,20 @@ def parse(out,err,code):
     if code!=0: row["stderr_tail"]=err[-1000:]
     return row
 
-def cmd(args,n,impl,mit,mode,baseline,op="ntt",operand="a",stage=0,slot=0,bit=0):
+def cmd(
+    args,
+    n,
+    impl,
+    mit,
+    mode,
+    baseline,
+    op="ntt",
+    operand="a",
+    site="input",
+    stage=0,
+    slot=0,
+    bit=0,
+):
     c=["cargo","run"]
     if args.release: c.append("--release")
     c+=["--","ckks-demo","--n",str(n),"--bits",str(args.bits),
@@ -55,6 +69,7 @@ def cmd(args,n,impl,mit,mode,baseline,op="ntt",operand="a",stage=0,slot=0,bit=0)
     if args.validate: c.append("--validate")
     if not baseline:
         c+=["--fault","--fault-op",op,"--fault-operand",operand,
+            "--fault-site",site,
             "--fault-stage",str(stage),"--fault-slot",str(slot),"--fault-bit",str(bit)]
     return c
 
@@ -72,6 +87,7 @@ def main():
     ap.add_argument("--scale-bits",type=int,default=10)
     ap.add_argument("--fault-ops",default="ntt,intt,mul")
     ap.add_argument("--operands",default="a,b")
+    ap.add_argument("--fault-sites",default="input")
     ap.add_argument("--ntt-impls",default="radix2")
     ap.add_argument("--mitigations",default="none,butterfly-check,stage-checksum")
     ap.add_argument("--checksum-modes",default="sum,sum-index")
@@ -88,9 +104,10 @@ def main():
     args=ap.parse_args()
     out=Path(args.output); out.parent.mkdir(parents=True,exist_ok=True)
     fields=["n","bits","scale_bits","ntt_impl","fault_enabled","fault_op","fault_operand",
-            "fault_stage","fault_slot","fault_bit","mitigation","mitigation_action",
-            "checksum_mode","command","returncode","execution_valid","golden_match",
-            "fault_observed","rms_error","relative_l2_error","max_abs_error","mean_abs_error",
+            "fault_site","fault_stage","fault_slot","fault_bit","mitigation","mitigation_action",
+            "checksum_mode","command","returncode","execution_valid","fault_injections",
+            "golden_match","fault_observed","rms_error","relative_l2_error",
+            "max_abs_error","mean_abs_error",
             "snr_db","elapsed_ns","scratch_bytes","checks_performed","check_failures",
             "s1_failures","s2_failures","recomputations","mitigation_elapsed_ns","stderr_tail"]
     count=0
@@ -111,21 +128,18 @@ def main():
              for op in csvs(args.fault_ops):
               op_operands=csvs(args.operands) if op=="mul" else ["a"]
               for operand in op_operands:
-               for st in stages(args.stages,n,op):
-                for sl in slots(args.slots,n):
-                 for bit in ints(args.fault_bits):
-                  c=cmd(args,n,impl,mit,mode,False,op,operand,st,sl,bit)
-                  row={"n":n,"bits":args.bits,"scale_bits":args.scale_bits,"ntt_impl":impl,
-                       "fault_enabled":"true","fault_op":op,"fault_operand":operand,
-                       "fault_stage":st,"fault_slot":sl,"fault_bit":bit,"mitigation":mit,
+               for site in csvs(args.fault_sites):
+                for st in stages(args.stages,n,op):
+                 for sl in slots(args.slots,n):
+                  for bit in ints(args.fault_bits):
+                   c=cmd(args,n,impl,mit,mode,False,op,operand,site,st,sl,bit)
+                   row={"n":n,"bits":args.bits,"scale_bits":args.scale_bits,"ntt_impl":impl,
+                        "fault_enabled":"true","fault_op":op,"fault_operand":operand,
+                        "fault_site":site,
+                        "fault_stage":st,"fault_slot":sl,"fault_bit":bit,"mitigation":mit,
                        "mitigation_action":args.mitigation_action,"checksum_mode":mode,
                        "command":" ".join(c)}
                   row.update(run(c,args.dry_run)); w.writerow(row); count+=1
                   if args.limit and count>=args.limit: return
     print(f"Wrote {count} rows to {out}")
 if __name__=="__main__": main()
-
-
-# TODO: ensure the innermost experiment loop wraps command generation with:
-#     for fault_site in fault_sites:
-# so every selected fault site is swept.

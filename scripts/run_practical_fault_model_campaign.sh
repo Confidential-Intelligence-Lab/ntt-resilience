@@ -13,7 +13,7 @@ ACTIONS=(${ACTIONS:-detect-only recompute})
 MODES=(${MODES:-single adjacent two-single two-adjacent})
 SLOTS_PER_STAGE="${SLOTS_PER_STAGE:-2}"
 
-echo "mode,run_id,total_runs,n,bits,mitigation,action,fault_op,fault_site,stage,slot,bit,fault_adjacent,fault2_enabled,fault2_site,fault2_stage,fault2_slot,fault2_bit,fault2_adjacent,fault_observed,golden_match,detected,corrected,max_abs_error,mean_abs_error,rms_error,relative_l2_error,snr_db,checks_performed,check_failures,stage_checks,stage_failures,s1_failures,s2_failures,recomputations,elapsed_ntt_ns,mitigation_time_ns,mod_adds,mod_subs,mod_muls,memory_reads,memory_writes" > "$OUT"
+echo "mode,run_id,total_runs,n,bits,mitigation,action,fault_op,fault_site,stage,slot,bit,fault_adjacent,fault2_enabled,fault2_site,fault2_stage,fault2_slot,fault2_bit,fault2_adjacent,returncode,execution_valid,fault_injections,fault_observed,golden_match,detected,corrected,max_abs_error,mean_abs_error,rms_error,relative_l2_error,snr_db,checks_performed,check_failures,stage_checks,stage_failures,s1_failures,s2_failures,recomputations,elapsed_ntt_ns,mitigation_time_ns,mod_adds,mod_subs,mod_muls,memory_reads,memory_writes" > "$OUT"
 
 TOTAL_RUNS=0
 for n in "${NS[@]}"; do for bits in "${BITS_LIST[@]}"; do for mode in "${MODES[@]}"; do for mitigation in "${MITIGATIONS[@]}"; do for action in "${ACTIONS[@]}"; do for site in "${FAULT_SITES[@]}"; do
@@ -71,10 +71,14 @@ PY
                   status=$?
                   set -e
                   if [[ "$status" -ne 0 ]]; then
-                    echo "$mode,$RUN_ID,$TOTAL_RUNS,$n,$bits,$mitigation,$action,ntt,$site,$stage,$slot,$bit,$fault_adjacent,$fault2_enabled,$site2,$stage2,$slot2,$bit2,$fault2_adjacent,ERROR,ERROR,ERROR,ERROR,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA" >> "$OUT"
+                    echo "$mode,$RUN_ID,$TOTAL_RUNS,$n,$bits,$mitigation,$action,ntt,$site,$stage,$slot,$bit,$fault_adjacent,$fault2_enabled,$site2,$stage2,$slot2,$bit2,$fault2_adjacent,$status,ERROR,NA,ERROR,ERROR,ERROR,ERROR,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA" >> "$OUT"
                     continue
                   fi
-                  row="$mode,$RUN_ID,$TOTAL_RUNS,$n,$bits,$mitigation,$action,ntt,$site,$stage,$slot,$bit,$fault_adjacent,$fault2_enabled,$site2,$stage2,$slot2,$bit2,$fault2_adjacent"
+
+                  execution_valid="$(extract_last "$result" "Execution valid:")"
+                  fault_injections="$(extract_metric_value "$result" "Fault injections")"
+
+                  row="$mode,$RUN_ID,$TOTAL_RUNS,$n,$bits,$mitigation,$action,ntt,$site,$stage,$slot,$bit,$fault_adjacent,$fault2_enabled,$site2,$stage2,$slot2,$bit2,$fault2_adjacent,$status,$execution_valid,$fault_injections"
                   for label in "Fault observed:" "Golden match:" "Fault detected:" "Fault corrected:"; do row="$row,$(extract_last "$result" "$label")"; done
                   for label in "Max abs error" "Mean abs error" "RMS error" "Relative L2 error" "SNR dB" "Checks performed" "Check failures" "Stage checks" "Stage failures" "S1 failures" "S2 failures" "Recomputations" "Elapsed NTT time" "Mitigation time ns" "Modular adds" "Modular subs" "Modular muls" "Memory reads" "Memory writes"; do row="$row,$(extract_metric_value "$result" "$label")"; done
                   echo "$row" >> "$OUT"
