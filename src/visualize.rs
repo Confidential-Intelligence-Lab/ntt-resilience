@@ -104,6 +104,7 @@ pub fn print_mitigation_metrics(m: &MitigationMetrics) {
         "Fault corrected:   {}",
         if m.fault_corrected { "yes" } else { "no" }
     );
+    println!("Fault injections:  {}", m.fault_injections);
     println!("Recomputations:    {}", m.recomputations);
     println!("Mitigation time ns: {}", m.mitigation_elapsed_ns);
     println!(

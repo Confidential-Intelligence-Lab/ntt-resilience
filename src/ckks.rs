@@ -72,6 +72,7 @@ pub struct CkksDemoResult {
     pub metrics: DecodedMetrics,
     pub system_metrics: NttSystemMetrics,
     pub mitigation_metrics: MitigationMetrics,
+    pub fault_injections: u64,
     pub trace: CkksExecutionTrace,
 }
 
@@ -280,6 +281,7 @@ impl CkksToyContext {
             metrics,
             system_metrics,
             mitigation_metrics,
+            fault_injections: faulty_run.fault_injections,
             trace,
         })
     }
@@ -299,6 +301,9 @@ impl CkksToyContext {
         let psi = self.params.primitive_2n_root;
         let psi_inv = crate::modarith::inv_mod(psi, q);
 
+        let ntt_injections_before = mitigation_metrics.fault_injections;
+        let mut direct_fault_injections = 0u64;
+
         let mut ta = vec![0u64; n];
         let mut tb = vec![0u64; n];
 
@@ -314,59 +319,47 @@ impl CkksToyContext {
             .ok_or_else(|| "internal fault state missing".to_string())
             .ok();
 
-        let (mut a_hat, ntt_stages) = if fault_op == Some("ntt")
-            && fault_spec.is_some()
-            && fault_spec.unwrap().operand == crate::fault::FaultOperand::A
+        let a_fault = if fault_op == Some("ntt")
+            && fault_spec
+                .map(|f| f.operand == crate::fault::FaultOperand::A)
+                .unwrap_or(false)
         {
-            crate::ntt::ntt_with_impl_and_mitigation(
-                &ta,
-                &self.params,
-                ntt_trace_enabled,
-                self.ntt_impl,
-                Some(&mut *system_metrics),
-                &self.mitigation,
-                mitigation_metrics,
-                fault_spec,
-            )?
+            fault_spec
         } else {
-            crate::ntt::ntt_with_impl_and_mitigation(
-                &ta,
-                &self.params,
-                ntt_trace_enabled,
-                self.ntt_impl,
-                Some(&mut *system_metrics),
-                &self.mitigation,
-                mitigation_metrics,
-                fault_spec,
-            )?
+            None
         };
 
-        let (mut b_hat, b_stages) = if fault_op == Some("ntt")
-            && fault_spec.is_some()
-            && fault_spec.unwrap().operand == crate::fault::FaultOperand::B
+        let (mut a_hat, ntt_stages) = crate::ntt::ntt_with_impl_and_mitigation(
+            &ta,
+            &self.params,
+            ntt_trace_enabled,
+            self.ntt_impl,
+            Some(&mut *system_metrics),
+            &self.mitigation,
+            mitigation_metrics,
+            a_fault,
+        )?;
+
+        let b_fault = if fault_op == Some("ntt")
+            && fault_spec
+                .map(|f| f.operand == crate::fault::FaultOperand::B)
+                .unwrap_or(false)
         {
-            crate::ntt::ntt_with_impl_and_mitigation(
-                &tb,
-                &self.params,
-                ntt_trace_enabled,
-                self.ntt_impl,
-                Some(&mut *system_metrics),
-                &self.mitigation,
-                mitigation_metrics,
-                fault_spec,
-            )?
+            fault_spec
         } else {
-            crate::ntt::ntt_with_impl_and_mitigation(
-                &tb,
-                &self.params,
-                ntt_trace_enabled,
-                self.ntt_impl,
-                Some(&mut *system_metrics),
-                &self.mitigation,
-                mitigation_metrics,
-                fault_spec,
-            )?
+            None
         };
+
+        let (mut b_hat, b_stages) = crate::ntt::ntt_with_impl_and_mitigation(
+            &tb,
+            &self.params,
+            ntt_trace_enabled,
+            self.ntt_impl,
+            Some(&mut *system_metrics),
+            &self.mitigation,
+            mitigation_metrics,
+            b_fault,
+        )?;
 
         // For CKKS pipeline experiments, a `mul` fault means a fault in one of the
         // pointwise multiplication operands in the NTT domain. This is intentionally
@@ -383,6 +376,7 @@ impl CkksToyContext {
                             self.params.modulus_bits,
                             q,
                         )?;
+                        direct_fault_injections += 1;
                     }
                     crate::fault::FaultOperand::B => {
                         inject_bit_fault(
@@ -392,6 +386,7 @@ impl CkksToyContext {
                             self.params.modulus_bits,
                             q,
                         )?;
+                        direct_fault_injections += 1;
                     }
                 }
             }
@@ -399,29 +394,22 @@ impl CkksToyContext {
 
         let c_hat = mul_ntt(&a_hat, &b_hat, q);
 
-        let (mut c, intt_stages) = if fault_op == Some("intt") && fault.is_some() {
-            crate::ntt::intt_with_impl_and_mitigation(
-                &c_hat,
-                &self.params,
-                intt_trace_enabled,
-                self.ntt_impl,
-                Some(&mut *system_metrics),
-                &self.mitigation,
-                mitigation_metrics,
-                fault_spec,
-            )?
+        let intt_fault = if fault_op == Some("intt") {
+            fault_spec
         } else {
-            crate::ntt::intt_with_impl_and_mitigation(
-                &c_hat,
-                &self.params,
-                intt_trace_enabled,
-                self.ntt_impl,
-                Some(&mut *system_metrics),
-                &self.mitigation,
-                mitigation_metrics,
-                fault_spec,
-            )?
+            None
         };
+
+        let (mut c, intt_stages) = crate::ntt::intt_with_impl_and_mitigation(
+            &c_hat,
+            &self.params,
+            intt_trace_enabled,
+            self.ntt_impl,
+            Some(&mut *system_metrics),
+            &self.mitigation,
+            mitigation_metrics,
+            intt_fault,
+        )?;
 
         for i in 0..n {
             c[i] = mul_mod(c[i], crate::modarith::pow_mod(psi_inv, i as u64, q), q);
@@ -431,6 +419,9 @@ impl CkksToyContext {
         if trace_options.ntt && !b_stages.is_empty() {
             combined_ntt_stages.extend(b_stages);
         }
+
+        let ntt_fault_injections = mitigation_metrics.fault_injections - ntt_injections_before;
+        let fault_injections = ntt_fault_injections + direct_fault_injections;
 
         Ok(PipelineRun {
             coeffs: c,
@@ -449,6 +440,7 @@ impl CkksToyContext {
             ntt_stages: combined_ntt_stages,
             mul_ntt: if trace_options.mul { Some(c_hat) } else { None },
             intt_stages,
+            fault_injections,
         })
     }
 }
@@ -463,6 +455,7 @@ struct PipelineRun {
     ntt_stages: Vec<StageTrace>,
     mul_ntt: Option<Vec<u64>>,
     intt_stages: Vec<StageTrace>,
+    fault_injections: u64,
 }
 
 pub fn demo_slots(n: usize) -> (Vec<Complex64>, Vec<Complex64>) {
@@ -607,5 +600,184 @@ mod tests {
         assert!(result.mitigation_metrics.mitigation_enabled);
         assert!(result.mitigation_metrics.checks_performed > 0);
         assert_eq!(result.mitigation_metrics.check_failures, 0);
+    }
+
+    fn mitigation_ctx() -> CkksToyContext {
+        let params = RingParams::new(16, 24).expect("valid test params");
+        CkksToyContext::new_with_impl(params, 10, NttImplementation::Radix2).with_mitigation(
+            crate::mitigation::MitigationOptions {
+                kind: crate::mitigation::MitigationKind::ButterflyCheck,
+                action: crate::mitigation::MitigationAction::DetectOnly,
+                max_retries: 1,
+                checksum_mode: crate::mitigation::ChecksumMode::Sum,
+            },
+        )
+    }
+
+    fn fault_at(
+        operand: FaultOperand,
+        stage: usize,
+        slot: usize,
+        bit: u32,
+        site: crate::fault::FaultSite,
+    ) -> FaultSpec {
+        let mut fault = FaultSpec::new(operand, stage, slot, bit);
+        fault.site = site;
+        fault
+    }
+
+    #[test]
+    fn no_fault_records_zero_injections() {
+        let ctx = ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, None, None)
+            .expect("no-fault CKKS execution should run");
+
+        assert_eq!(result.fault_injections, 0);
+    }
+
+    #[test]
+    fn ntt_input_fault_records_exactly_one_injection() {
+        let ctx = ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+        let fault = fault_at(FaultOperand::A, 0, 0, 0, crate::fault::FaultSite::Input);
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
+            .expect("NTT input fault should run");
+
+        assert_eq!(result.fault_injections, 1);
+    }
+
+    #[test]
+    fn ntt_input_fault_respects_requested_stage() {
+        let ctx = ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+        let fault = fault_at(FaultOperand::A, 3, 0, 0, crate::fault::FaultSite::Input);
+
+        let result = ctx
+            .multiply_with_optional_fault_traced(
+                &a,
+                &b,
+                Some("ntt"),
+                Some(&fault),
+                CkksTraceOptions {
+                    ntt: true,
+                    ..CkksTraceOptions::default()
+                },
+            )
+            .expect("stage-aware NTT input fault should run");
+
+        assert_eq!(result.fault_injections, 1);
+
+        // For N=16, A occupies the first four forward-NTT stage traces.
+        assert!(result.trace.correct_ntt_stages.len() >= 4);
+        assert!(result.trace.faulty_ntt_stages.len() >= 4);
+
+        for stage in 0..3 {
+            assert_eq!(
+                result.trace.correct_ntt_stages[stage].input,
+                result.trace.faulty_ntt_stages[stage].input,
+                "fault must not appear before requested stage"
+            );
+        }
+
+        assert_ne!(
+            result.trace.correct_ntt_stages[3].input, result.trace.faulty_ntt_stages[3].input,
+            "fault must appear at requested stage"
+        );
+    }
+
+    #[test]
+    fn ntt_arithmetic_fault_is_routed_only_to_operand_a() {
+        let ctx = mitigation_ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+        let fault = fault_at(FaultOperand::A, 0, 1, 0, crate::fault::FaultSite::MulOutput);
+
+        let result = ctx
+            .multiply_with_optional_fault_traced(
+                &a,
+                &b,
+                Some("ntt"),
+                Some(&fault),
+                CkksTraceOptions {
+                    ntt: true,
+                    ..CkksTraceOptions::default()
+                },
+            )
+            .expect("operand-A NTT fault should run");
+
+        assert_eq!(result.fault_injections, 1);
+        assert_ne!(result.trace.correct_ntt_a, result.trace.faulty_ntt_a);
+        assert_eq!(result.trace.correct_ntt_b, result.trace.faulty_ntt_b);
+    }
+
+    #[test]
+    fn ntt_arithmetic_fault_is_routed_only_to_operand_b() {
+        let ctx = mitigation_ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+        let fault = fault_at(FaultOperand::B, 0, 1, 0, crate::fault::FaultSite::MulOutput);
+
+        let result = ctx
+            .multiply_with_optional_fault_traced(
+                &a,
+                &b,
+                Some("ntt"),
+                Some(&fault),
+                CkksTraceOptions {
+                    ntt: true,
+                    ..CkksTraceOptions::default()
+                },
+            )
+            .expect("operand-B NTT fault should run");
+
+        assert_eq!(result.fault_injections, 1);
+        assert_eq!(result.trace.correct_ntt_a, result.trace.faulty_ntt_a);
+        assert_ne!(result.trace.correct_ntt_b, result.trace.faulty_ntt_b);
+    }
+
+    #[test]
+    fn intt_input_fault_records_exactly_one_injection() {
+        let ctx = ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+        let fault = fault_at(FaultOperand::A, 0, 0, 4, crate::fault::FaultSite::Input);
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, Some("intt"), Some(&fault))
+            .expect("iNTT input fault should run");
+
+        assert_eq!(result.fault_injections, 1);
+    }
+
+    #[test]
+    fn pointwise_mul_fault_records_exactly_one_injection() {
+        let ctx = ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+        let fault = FaultSpec::new(FaultOperand::A, 0, 0, 4);
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, Some("mul"), Some(&fault))
+            .expect("pointwise multiplication fault should run");
+
+        assert_eq!(result.fault_injections, 1);
+    }
+
+    #[test]
+    fn impossible_arithmetic_coordinate_records_zero_injections() {
+        let ctx = mitigation_ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+
+        // At radix-2 stage 0, MulOutput is produced at the hi positions:
+        // 1, 3, 5, ... . Slot 0 therefore cannot match a MulOutput event.
+        let fault = fault_at(FaultOperand::A, 0, 0, 0, crate::fault::FaultSite::MulOutput);
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
+            .expect("unmatched coordinate should execute without an injection");
+
+        assert_eq!(result.fault_injections, 0);
+        assert_eq!(result.decoded_correct, result.decoded_faulty);
     }
 }

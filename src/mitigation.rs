@@ -62,6 +62,11 @@ pub struct MitigationMetrics {
     pub recomputations: u64,
     pub fault_detected: bool,
     pub fault_corrected: bool,
+    /// Number of fault injections that actually executed.
+    ///
+    /// This is distinct from a fault being requested, observable in the
+    /// decoded output, detected by a mitigation, or corrected.
+    pub fault_injections: u64,
     pub mitigation_elapsed_ns: u128,
     pub stage_checks_performed: u64,
     pub stage_check_failures: u64,
