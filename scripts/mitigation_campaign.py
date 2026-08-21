@@ -24,19 +24,28 @@ def parse(out,err,code):
       "fault_injections":r"Fault injections:\s*([0-9]+)",
       "golden_match":r"Golden match:\s*([A-Za-z/]+)",
       "fault_observed":r"Fault observed:\s*([A-Za-z/]+)",
+      "detected":r"Fault detected:\s*([A-Za-z/]+)",
+      "corrected":r"Fault corrected:\s*([A-Za-z/]+)",
       "rms_error":r"RMS error:\s*([-+0-9.eE]+)",
       "relative_l2_error":r"Relative L2 error:\s*([-+0-9.eE]+)",
       "max_abs_error":r"Max abs error:\s*([-+0-9.eE]+)",
       "mean_abs_error":r"Mean abs error:\s*([-+0-9.eE]+)",
-      "snr_db":r"SNR.*?:\s*([-+0-9.eE]+)",
-      "elapsed_ns":r"Elapsed.*?ns:\s*([0-9]+)",
+      "snr_db":r"SNR.*?:\s*([-+0-9.eE]+|[-+]?inf)",
+      "elapsed_ntt_ns":r"Elapsed NTT time:\s*([0-9]+)",
       "scratch_bytes":r"Scratch bytes:\s*([0-9]+)",
       "checks_performed":r"Checks performed:\s*([0-9]+)",
       "check_failures":r"Check failures:\s*([0-9]+)",
+      "stage_checks":r"Stage checks:\s*([0-9]+)",
+      "stage_failures":r"Stage failures:\s*([0-9]+)",
       "s1_failures":r"S1 failures:\s*([0-9]+)",
       "s2_failures":r"S2 failures:\s*([0-9]+)",
       "recomputations":r"Recomputations:\s*([0-9]+)",
-      "mitigation_elapsed_ns":r"Mitigation elapsed.*?ns:\s*([0-9]+)",
+      "mod_adds":r"Modular adds:\s*([0-9]+)",
+      "mod_subs":r"Modular subs:\s*([0-9]+)",
+      "mod_muls":r"Modular muls:\s*([0-9]+)",
+      "memory_reads":r"Memory reads:\s*([0-9]+)",
+      "memory_writes":r"Memory writes:\s*([0-9]+)",
+      "mitigation_time_ns":r"Mitigation time ns:\s*([0-9]+)",
     }
     row={"returncode":str(code)}
     for k,p in pats.items():
@@ -106,10 +115,12 @@ def main():
     fields=["n","bits","scale_bits","ntt_impl","fault_enabled","fault_op","fault_operand",
             "fault_site","fault_stage","fault_slot","fault_bit","mitigation","mitigation_action",
             "checksum_mode","command","returncode","execution_valid","fault_injections",
-            "golden_match","fault_observed","rms_error","relative_l2_error",
-            "max_abs_error","mean_abs_error",
-            "snr_db","elapsed_ns","scratch_bytes","checks_performed","check_failures",
-            "s1_failures","s2_failures","recomputations","mitigation_elapsed_ns","stderr_tail"]
+            "golden_match","fault_observed","detected","corrected",
+            "rms_error","relative_l2_error","max_abs_error","mean_abs_error",
+            "snr_db","elapsed_ntt_ns","scratch_bytes","checks_performed","check_failures",
+            "stage_checks","stage_failures","s1_failures","s2_failures","recomputations",
+            "mitigation_time_ns","mod_adds","mod_subs","mod_muls","memory_reads",
+            "memory_writes","stderr_tail"]
     count=0
     with out.open("w",newline="") as f:
         w=csv.DictWriter(f,fieldnames=fields,extrasaction="ignore"); w.writeheader()
@@ -137,9 +148,9 @@ def main():
                         "fault_enabled":"true","fault_op":op,"fault_operand":operand,
                         "fault_site":site,
                         "fault_stage":st,"fault_slot":sl,"fault_bit":bit,"mitigation":mit,
-                       "mitigation_action":args.mitigation_action,"checksum_mode":mode,
-                       "command":" ".join(c)}
-                  row.update(run(c,args.dry_run)); w.writerow(row); count+=1
-                  if args.limit and count>=args.limit: return
+                        "mitigation_action":args.mitigation_action,"checksum_mode":mode,
+                        "command":" ".join(c)}
+                   row.update(run(c,args.dry_run)); w.writerow(row); count+=1
+                   if args.limit and count>=args.limit: return
     print(f"Wrote {count} rows to {out}")
 if __name__=="__main__": main()
