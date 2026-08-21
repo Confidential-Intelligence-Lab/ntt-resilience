@@ -1,85 +1,116 @@
-# FT-FHE: Software Resilience for Number Theoretic Transforms
+# ntt-resilience
 
-This repository contains the reference implementation accompanying the paper:
+**Structure-Aware Software Resilience for Number Theoretic Transforms**
 
-> **Directions for Software Resilience for Number Theoretic Transforms**
-> *(authors omitted for anonymous review / or insert citation after publication)*
+`ntt-resilience` is a research framework for studying software-based detection and recovery of transient arithmetic faults in Number Theoretic Transform (NTT) computations.
 
-The framework provides a configurable implementation of radix-2 Number Theoretic Transforms (NTTs) with software-implemented resilience mechanisms, systematic fault injection, and end-to-end validation using a CKKS-inspired computation pipeline.
+The framework exploits algebraic structure intrinsic to radix-2 NTTs rather than relying exclusively on full computational redundancy. It implements fine-grained butterfly consistency invariants, stage-level checksum verification, selective recomputation, configurable fault injection, and end-to-end evaluation through a CKKS-inspired application pipeline.
 
-## Features
+This repository accompanies the FDTC 2026 paper:
 
-- Radix-2 Cooley-Tukey NTT and inverse NTT
-- Multiple NTT backends
-- Configurable arithmetic fault injection
-- Fine-grained butterfly consistency invariants
-- Stage-level checksum detection (Sum and Sum+Index)
-- Selective recomputation for transient fault recovery
-- CKKS-inspired encoding and decoding pipeline
-- Comprehensive runtime metrics
-- Automated experimental campaigns
-- Unit and CLI integration tests
+> **Short Paper: Structure-Aware Software Resilience for Number Theoretic Transforms**<br>
+> Brittany Liu, Caroline Wang, Jayanta Chowdhury, Igor Nunes, Nahid Farhady, Elif Bilge Kavun, and Ro Cammarota.<br>
+> Accepted for presentation at the 2026 Workshop on Fault Diagnosis and Tolerance in Cryptography (FDTC 2026).
 
----
+## What the Framework Provides
+
+### Structure-Aware Fault Detection
+
+Two complementary software mechanisms exploit intrinsic properties of radix-2 NTT computation:
+
+- **Butterfly consistency invariants** validate individual radix-2 butterflies and provide fine-grained fault localization.
+- **Stage-level checksums** use Sum and Sum+Index projections to detect corruption at transform-stage granularity.
+
+The mechanisms expose different trade-offs among protection scope, detection coverage, localization granularity, recovery granularity, and execution overhead.
+
+### Selective Recovery
+
+Detected transient faults can trigger recomputation at the granularity exposed by the detector:
+
+- butterfly-level recomputation for butterfly consistency violations;
+- stage-level rollback and recomputation for stage-checksum violations.
+
+Recovery assumes a transient, non-recurring fault model.
+
+### Configurable Fault Injection
+
+The framework supports controlled arithmetic fault injection across representative locations in the NTT datapath, including:
+
+- inputs;
+- twiddle-multiplication outputs;
+- modular-addition outputs;
+- modular-subtraction outputs;
+- butterfly outputs; and
+- register writes.
+
+Experimental campaigns support single-bit and more complex transient fault models.
+
+### Application-Level Evaluation
+
+A CKKS-inspired encode-compute-decode pipeline is provided to determine whether faults introduced during forward or inverse NTT execution propagate to application-visible output corruption.
+
+The CKKS-inspired pipeline is an **evaluation environment**. The proposed resilience mechanisms operate on the NTT itself and are not specific to homomorphic encryption.
 
 ## Repository Structure
 
-```
-src/          Rust implementation
-tests/        Unit and CLI tests
-scripts/      Experiment and evaluation scripts
-analysis/     Analysis utilities
-results/      Example campaign outputs
-docs/         Additional documentation
-```
+~~~text
+src/          Rust implementation of NTTs, fault injection,
+              mitigation, validation, and evaluation
 
----
+tests/        Unit and CLI integration tests
+
+scripts/      Automated experimental campaigns
+
+analysis/     Analysis and result-processing utilities
+
+results/      Experimental datasets and generated results
+
+docs/         Additional experimental documentation
+~~~
 
 ## Building
 
-Requirements:
+### Requirements
 
-- Rust (stable toolchain)
+- Rust stable toolchain
+- Cargo
+- Python 3.11 or later for experimental automation and analysis
 
-Build the project:
+Build the release version:
 
-```bash
+~~~bash
 cargo build --release
-```
+~~~
 
-Run all tests:
+Run the test suite:
 
-```bash
-cargo test
-```
+~~~bash
+cargo test --all
+~~~
 
-Run formatting and linting:
+Check formatting and linting:
 
-```bash
-cargo fmt --all
+~~~bash
+cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-```
-
----
+~~~
 
 ## Quick Start
 
-Run the CKKS demonstration:
+Run a fault-free CKKS-inspired computation:
 
-```bash
+~~~bash
 cargo run --release -- ckks-demo \
     --n 2048 \
     --bits 54 \
     --validate
-```
+~~~
 
----
+### Inject a Transient Fault
 
-## Fault Injection Example
+For example, inject a bit corruption into a butterfly output during the forward NTT:
 
-Inject a transient arithmetic fault during the forward NTT:
-
-```bash
+~~~bash
 cargo run --release -- ckks-demo \
     --n 2048 \
     --bits 54 \
@@ -90,107 +121,68 @@ cargo run --release -- ckks-demo \
     --fault-slot 0 \
     --fault-bit 40 \
     --validate
-```
+~~~
 
----
+### Enable Butterfly Consistency Checking
 
-## Butterfly Invariants
-
-Run with butterfly consistency checking:
-
-```bash
+~~~bash
 cargo run --release -- ckks-demo \
     --fault \
     --mitigation butterfly-check \
     --mitigation-action recompute
-```
+~~~
 
----
+### Enable Stage-Level Sum+Index Checking
 
-## Stage Checksums
-
-Run Sum+Index checksum verification:
-
-```bash
+~~~bash
 cargo run --release -- ckks-demo \
     --fault \
     --mitigation stage-checksum \
     --checksum-mode sum-index \
     --mitigation-action detect-only
-```
+~~~
 
----
+## Experimental Campaigns
 
-## Reproducing the Experiments
+The `scripts/` directory contains automated campaigns for:
 
-The `scripts/` directory contains the automation used for the paper, including:
+- transient fault propagation and observability;
+- butterfly-invariant detection;
+- stage-level checksum detection;
+- selective recovery;
+- practical multi-bit and multi-location fault models; and
+- runtime-overhead characterization.
 
-- fault-injection campaigns
-- checksum evaluation
-- runtime-overhead measurements
-- practical fault models
-- large-ring experiments
+The repository also contains analysis utilities for processing campaign outputs.
 
-Example:
+Detailed instructions for reproducing the final FDTC 2026 experimental results are provided in [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md).
 
-```bash
-./scripts/run_checksum_detection_campaign.sh
-```
+> **Artifact status:** The repository is currently being synchronized with the FDTC 2026 camera-ready artifact. The final paper-to-artifact mapping and frozen experimental datasets will be identified by the FDTC 2026 release tag.
 
----
+## Scope
 
-## Testing
+`ntt-resilience` is intended as a research and evaluation framework, not as a production cryptographic library.
 
-The repository includes
+The current implementation focuses on radix-2 NTTs and transient arithmetic faults. Persistent faults and active adversarial fault attacks require stronger assumptions and countermeasures and are outside the current recovery model.
 
-- unit tests
-- CLI integration tests
-- release validation
-
-Current status:
-
-- ✅ cargo fmt
-- ✅ cargo clippy
-- ✅ cargo test
-
----
-
-## Notes
-
-The encoding and decoding pipeline follows the structure of CKKS to provide an application-level evaluation environment for fault propagation and resilience. It is intended for research and evaluation rather than as a production homomorphic encryption library.
-
----
+Although the FDTC evaluation uses a CKKS-inspired computation to expose application-level effects, the structure-aware mechanisms operate at the NTT level and can be investigated in other NTT-based lattice-cryptographic workloads.
 
 ## Citation
 
-If you use this software in academic work, please cite:
+If you use this software or build upon the structure-aware resilience mechanisms, please cite:
 
-```
-(To be updated after publication.)
-```
+> Brittany Liu, Caroline Wang, Jayanta Chowdhury, Igor Nunes, Nahid Farhady, Elif Bilge Kavun, and Ro Cammarota.<br>
+> **Short Paper: Structure-Aware Software Resilience for Number Theoretic Transforms.**<br>
+> FDTC 2026.
 
----
+Machine-readable citation metadata is available in [`CITATION.cff`](CITATION.cff).
 
 ## License
 
-MIT License
+See [`LICENSE`](LICENSE).
 
-Copyright (c) 2026 <Authors>
+## Project
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Developed by the **Confidential Intelligence Lab**, University of California, Irvine.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+https://github.com/Confidential-Intelligence-Lab
