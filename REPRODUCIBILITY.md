@@ -2,7 +2,7 @@
 
 This document describes how to reproduce the experimental results presented in the paper
 
-> **Directions for Software Resilience for Number Theoretic Transforms**
+> **Short Paper: Structure-Aware Software Resilience for Number Theoretic Transforms**
 
 The repository contains a configurable framework for evaluating software resilience techniques for radix-2 Number Theoretic Transforms (NTTs), including transient fault injection, butterfly consistency invariants, stage-level checksum verification, and selective recomputation.
 
