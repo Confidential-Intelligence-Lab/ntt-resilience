@@ -373,6 +373,19 @@ where
     {
         self.ccmm(rhs).reduce_with(reducer)
     }
+
+    /// Performs structural CCMM, combines the four bilinear terms into
+    /// the degree-2 ciphertext polynomial, and dispatches that product
+    /// to a supplied relinearization operation.
+    ///
+    /// Rescaling is intentionally not part of this operation.
+    pub fn ccmm_relinearize<F>(&self, rhs: &Self, relinearize: F) -> Self
+    where
+        F: FnOnce(MatrixCiphertextQuadraticProduct<T>) -> Self,
+    {
+        let quadratic = self.ccmm(rhs).combine_degree_two();
+        relinearize(quadratic)
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +532,36 @@ mod tests {
         let rhs = MatrixCiphertext::new(encoded(2, 2, 1), encoded(2, 2, 1));
 
         let _ = lhs.ccmm(&rhs);
+    }
+
+    #[test]
+    fn ccmm_relinearize_receives_correct_quadratic_product() {
+        let lhs = MatrixCiphertext::new(
+            filled_encoded(2, 2, 1, &[1, 0, 0, 1]),
+            filled_encoded(2, 2, 1, &[2, 0, 0, 2]),
+        );
+
+        let rhs = MatrixCiphertext::new(
+            filled_encoded(2, 2, 1, &[3, 0, 0, 3]),
+            filled_encoded(2, 2, 1, &[4, 0, 0, 4]),
+        );
+
+        let result = lhs.ccmm_relinearize(&rhs, |quadratic| {
+            // c0 = B*D = 3I
+            assert_eq!(quadratic.c0(), &filled_encoded(2, 2, 1, &[3, 0, 0, 3]));
+
+            // c1 = B*C + A*D = 4I + 6I = 10I
+            assert_eq!(quadratic.c1(), &filled_encoded(2, 2, 1, &[10, 0, 0, 10]));
+
+            // c2 = A*C = 8I
+            assert_eq!(quadratic.c2(), &filled_encoded(2, 2, 1, &[8, 0, 0, 8]));
+
+            // Test-only stand-in for the backend's key-backed relinearizer.
+            MatrixCiphertext::new(quadratic.c0().clone(), quadratic.c1().clone())
+        });
+
+        assert_eq!(result.b().raw(), &[3, 0, 0, 3]);
+        assert_eq!(result.a().raw(), &[10, 0, 0, 10]);
     }
 
     #[test]
