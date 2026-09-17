@@ -111,6 +111,12 @@ impl<T> MatrixCiphertextProduct<T> {
     pub fn batches(&self) -> usize {
         self.bd.batches()
     }
+
+    /// Consumes the product and returns the four unreduced bilinear terms
+    /// `(BD, BC, AD, AC)`.
+    pub fn into_terms(self) -> (MatEcd<T>, MatEcd<T>, MatEcd<T>, MatEcd<T>) {
+        (self.bd, self.bc, self.ad, self.ac)
+    }
 }
 
 impl<T> MatrixCiphertext<T> {
@@ -168,6 +174,30 @@ impl<T> MatrixCiphertext<T> {
     /// Consumes the ciphertext and returns `(B, A)`.
     pub fn into_components(self) -> (MatEcd<T>, MatEcd<T>) {
         (self.b, self.a)
+    }
+}
+
+/// Scheme-specific reduction of an unreduced ciphertext-ciphertext product.
+///
+/// Structural CCMM produces four bilinear terms `(BD, BC, AD, AC)`.
+/// Implementations of this trait define how those terms are transformed
+/// into a valid two-component ciphertext for a particular cryptographic
+/// construction.
+///
+/// No reduction, relinearization, key switching, scaling, or rounding
+/// semantics are assumed at this layer.
+pub trait MatrixCiphertextProductReducer<T> {
+    /// Reduces an unreduced four-term product to a two-component ciphertext.
+    fn reduce(&self, product: MatrixCiphertextProduct<T>) -> MatrixCiphertext<T>;
+}
+
+impl<T> MatrixCiphertextProduct<T> {
+    /// Applies a scheme-specific reducer to this unreduced product.
+    pub fn reduce_with<R>(self, reducer: &R) -> MatrixCiphertext<T>
+    where
+        R: MatrixCiphertextProductReducer<T>,
+    {
+        reducer.reduce(self)
     }
 }
 
@@ -372,6 +402,50 @@ mod tests {
         let rhs = MatrixCiphertext::new(encoded(2, 2, 1), encoded(2, 2, 1));
 
         let _ = lhs.ccmm(&rhs);
+    }
+
+    #[test]
+    fn product_into_terms_preserves_all_four_terms() {
+        let bd = filled_encoded(1, 1, 1, &[1]);
+        let bc = filled_encoded(1, 1, 1, &[2]);
+        let ad = filled_encoded(1, 1, 1, &[3]);
+        let ac = filled_encoded(1, 1, 1, &[4]);
+
+        let product = MatrixCiphertextProduct::new(bd.clone(), bc.clone(), ad.clone(), ac.clone());
+
+        let (actual_bd, actual_bc, actual_ad, actual_ac) = product.into_terms();
+
+        assert_eq!(actual_bd, bd);
+        assert_eq!(actual_bc, bc);
+        assert_eq!(actual_ad, ad);
+        assert_eq!(actual_ac, ac);
+    }
+
+    #[test]
+    fn product_dispatches_to_scheme_specific_reducer() {
+        struct TestReducer;
+
+        impl MatrixCiphertextProductReducer<i64> for TestReducer {
+            fn reduce(&self, product: MatrixCiphertextProduct<i64>) -> MatrixCiphertext<i64> {
+                let (bd, _bc, _ad, ac) = product.into_terms();
+
+                // This is deliberately a test-only mapping. It validates the
+                // reducer boundary, not cryptographic reduction semantics.
+                MatrixCiphertext::new(bd, ac)
+            }
+        }
+
+        let product = MatrixCiphertextProduct::new(
+            filled_encoded(1, 1, 1, &[11]),
+            filled_encoded(1, 1, 1, &[12]),
+            filled_encoded(1, 1, 1, &[13]),
+            filled_encoded(1, 1, 1, &[14]),
+        );
+
+        let result = product.reduce_with(&TestReducer);
+
+        assert_eq!(result.b(), &filled_encoded(1, 1, 1, &[11]));
+        assert_eq!(result.a(), &filled_encoded(1, 1, 1, &[14]));
     }
 
     #[test]
