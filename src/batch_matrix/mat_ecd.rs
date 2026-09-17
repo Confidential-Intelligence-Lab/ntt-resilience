@@ -92,6 +92,41 @@ impl<T> MatEcd<T>
 where
     T: Clone + Default + std::ops::Add<Output = T> + std::ops::Mul<Output = T>,
 {
+    /// Adds corresponding encoded matrix entries.
+    ///
+    /// # Panics
+    ///
+    /// Panics if matrix or batch dimensions differ.
+    pub fn add(&self, rhs: &Self) -> Self {
+        assert_eq!(
+            self.rows, rhs.rows,
+            "row counts must match for matrix addition"
+        );
+        assert_eq!(
+            self.cols, rhs.cols,
+            "column counts must match for matrix addition"
+        );
+        assert_eq!(
+            self.batches, rhs.batches,
+            "batch counts must match for matrix addition"
+        );
+
+        let data = self
+            .data
+            .iter()
+            .cloned()
+            .zip(rhs.data.iter().cloned())
+            .map(|(lhs, rhs)| lhs + rhs)
+            .collect();
+
+        Self {
+            rows: self.rows,
+            cols: self.cols,
+            batches: self.batches,
+            data,
+        }
+    }
+
     /// Multiplies corresponding matrices in each batch.
     ///
     /// If `self` has shape `(batch, m, n)` and `rhs` has shape
@@ -161,6 +196,53 @@ mod tests {
         }
 
         out
+    }
+
+    #[test]
+    fn encoded_addition_is_elementwise() {
+        let mut lhs = BatchMatrix::<i64>::new(2, 2, 1);
+        let mut rhs = BatchMatrix::<i64>::new(2, 2, 1);
+
+        lhs.set(0, 0, 0, 1);
+        lhs.set(0, 1, 0, 2);
+        lhs.set(0, 0, 1, 3);
+        lhs.set(0, 1, 1, 4);
+
+        rhs.set(0, 0, 0, 10);
+        rhs.set(0, 1, 0, 20);
+        rhs.set(0, 0, 1, 30);
+        rhs.set(0, 1, 1, 40);
+
+        let result = MatEcd::encode(&lhs).add(&MatEcd::encode(&rhs));
+
+        assert_eq!(result.raw(), &[11, 22, 33, 44]);
+    }
+
+    #[test]
+    #[should_panic(expected = "row counts must match")]
+    fn encoded_addition_rejects_mismatched_rows() {
+        let lhs = MatEcd::encode(&BatchMatrix::<i64>::new(2, 2, 1));
+        let rhs = MatEcd::encode(&BatchMatrix::<i64>::new(3, 2, 1));
+
+        let _ = lhs.add(&rhs);
+    }
+
+    #[test]
+    #[should_panic(expected = "column counts must match")]
+    fn encoded_addition_rejects_mismatched_columns() {
+        let lhs = MatEcd::encode(&BatchMatrix::<i64>::new(2, 2, 1));
+        let rhs = MatEcd::encode(&BatchMatrix::<i64>::new(2, 3, 1));
+
+        let _ = lhs.add(&rhs);
+    }
+
+    #[test]
+    #[should_panic(expected = "batch counts must match")]
+    fn encoded_addition_rejects_mismatched_batches() {
+        let lhs = MatEcd::encode(&BatchMatrix::<i64>::new(2, 2, 1));
+        let rhs = MatEcd::encode(&BatchMatrix::<i64>::new(2, 2, 2));
+
+        let _ = lhs.add(&rhs);
     }
 
     #[test]
