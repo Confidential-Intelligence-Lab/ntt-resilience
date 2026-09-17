@@ -256,6 +256,19 @@ where
             self.a.matmul(&rhs.a),
         )
     }
+
+    /// Applies structural ciphertext-ciphertext matrix multiplication and
+    /// immediately dispatches the unreduced product to a scheme-specific
+    /// reducer.
+    ///
+    /// This method does not define reduction semantics. It composes
+    /// `ccmm()` with the supplied [`MatrixCiphertextProductReducer`].
+    pub fn ccmm_reduce<R>(&self, rhs: &Self, reducer: &R) -> Self
+    where
+        R: MatrixCiphertextProductReducer<T>,
+    {
+        self.ccmm(rhs).reduce_with(reducer)
+    }
 }
 
 #[cfg(test)]
@@ -402,6 +415,39 @@ mod tests {
         let rhs = MatrixCiphertext::new(encoded(2, 2, 1), encoded(2, 2, 1));
 
         let _ = lhs.ccmm(&rhs);
+    }
+
+    #[test]
+    fn ccmm_reduce_composes_product_and_reducer() {
+        struct TestReducer;
+
+        impl MatrixCiphertextProductReducer<i64> for TestReducer {
+            fn reduce(&self, product: MatrixCiphertextProduct<i64>) -> MatrixCiphertext<i64> {
+                let (bd, _bc, _ad, ac) = product.into_terms();
+
+                // Test-only mapping: verifies operation composition rather
+                // than cryptographic reduction semantics.
+                MatrixCiphertext::new(bd, ac)
+            }
+        }
+
+        // B = I, A = 2I
+        let lhs = MatrixCiphertext::new(
+            filled_encoded(2, 2, 1, &[1, 0, 0, 1]),
+            filled_encoded(2, 2, 1, &[2, 0, 0, 2]),
+        );
+
+        // D = 3I, C = 4I
+        let rhs = MatrixCiphertext::new(
+            filled_encoded(2, 2, 1, &[3, 0, 0, 3]),
+            filled_encoded(2, 2, 1, &[4, 0, 0, 4]),
+        );
+
+        let result = lhs.ccmm_reduce(&rhs, &TestReducer);
+
+        // TestReducer selects BD and AC.
+        assert_eq!(result.b(), &filled_encoded(2, 2, 1, &[3, 0, 0, 3]));
+        assert_eq!(result.a(), &filled_encoded(2, 2, 1, &[8, 0, 0, 8]));
     }
 
     #[test]
