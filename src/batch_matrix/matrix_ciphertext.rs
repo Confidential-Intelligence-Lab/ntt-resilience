@@ -119,6 +119,92 @@ impl<T> MatrixCiphertextProduct<T> {
     }
 }
 
+/// Degree-2 structural ciphertext product produced before relinearization.
+///
+/// For input ciphertexts `(B, A)` and `(D, C)`, the ciphertext polynomial
+///
+/// `(B + A*s) * (D + C*s)`
+///
+/// has coefficients
+///
+/// `c0 = B*D`
+/// `c1 = B*C + A*D`
+/// `c2 = A*C`.
+///
+/// This corresponds to the rank-2 ciphertext consumed by the
+/// scheme-specific relinearization stage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatrixCiphertextQuadraticProduct<T> {
+    c0: MatEcd<T>,
+    c1: MatEcd<T>,
+    c2: MatEcd<T>,
+}
+
+impl<T> MatrixCiphertextQuadraticProduct<T> {
+    pub fn new(c0: MatEcd<T>, c1: MatEcd<T>, c2: MatEcd<T>) -> Self {
+        assert_eq!(
+            c0.rows(),
+            c1.rows(),
+            "quadratic product terms must have matching row counts"
+        );
+        assert_eq!(
+            c0.rows(),
+            c2.rows(),
+            "quadratic product terms must have matching row counts"
+        );
+        assert_eq!(
+            c0.cols(),
+            c1.cols(),
+            "quadratic product terms must have matching column counts"
+        );
+        assert_eq!(
+            c0.cols(),
+            c2.cols(),
+            "quadratic product terms must have matching column counts"
+        );
+        assert_eq!(
+            c0.batches(),
+            c1.batches(),
+            "quadratic product terms must have matching batch counts"
+        );
+        assert_eq!(
+            c0.batches(),
+            c2.batches(),
+            "quadratic product terms must have matching batch counts"
+        );
+
+        Self { c0, c1, c2 }
+    }
+
+    pub fn c0(&self) -> &MatEcd<T> {
+        &self.c0
+    }
+
+    pub fn c1(&self) -> &MatEcd<T> {
+        &self.c1
+    }
+
+    pub fn c2(&self) -> &MatEcd<T> {
+        &self.c2
+    }
+
+    pub fn rows(&self) -> usize {
+        self.c0.rows()
+    }
+
+    pub fn cols(&self) -> usize {
+        self.c0.cols()
+    }
+
+    pub fn batches(&self) -> usize {
+        self.c0.batches()
+    }
+
+    pub fn into_terms(self) -> (MatEcd<T>, MatEcd<T>, MatEcd<T>) {
+        (self.c0, self.c1, self.c2)
+    }
+}
+
 impl<T> MatrixCiphertext<T> {
     /// Constructs a matrix ciphertext from its `(B, A)` components.
     ///
@@ -186,6 +272,24 @@ impl<T> MatrixCiphertext<T> {
 ///
 /// No reduction, relinearization, key switching, scaling, or rounding
 /// semantics are assumed at this layer.
+impl<T> MatrixCiphertextProduct<T>
+where
+    T: Clone + Default + std::ops::Add<Output = T> + std::ops::Mul<Output = T>,
+{
+    /// Combines the four bilinear CCMM blocks into the degree-2
+    /// ciphertext polynomial coefficients consumed by relinearization.
+    ///
+    /// For `(BD, BC, AD, AC)`, returns
+    ///
+    /// `(c0, c1, c2) = (BD, BC + AD, AC)`.
+    pub fn combine_degree_two(self) -> MatrixCiphertextQuadraticProduct<T> {
+        let (bd, bc, ad, ac) = self.into_terms();
+        let middle = bc.add(&ad);
+
+        MatrixCiphertextQuadraticProduct::new(bd, middle, ac)
+    }
+}
+
 pub trait MatrixCiphertextProductReducer<T> {
     /// Reduces an unreduced four-term product to a two-component ciphertext.
     fn reduce(&self, product: MatrixCiphertextProduct<T>) -> MatrixCiphertext<T>;
@@ -448,6 +552,42 @@ mod tests {
         // TestReducer selects BD and AC.
         assert_eq!(result.b(), &filled_encoded(2, 2, 1, &[3, 0, 0, 3]));
         assert_eq!(result.a(), &filled_encoded(2, 2, 1, &[8, 0, 0, 8]));
+    }
+
+    #[test]
+    fn ccmm_product_combines_into_degree_two_ciphertext() {
+        // Four-term product:
+        //
+        // BD = [[1, 2],
+        //       [3, 4]]
+        //
+        // BC = [[5, 6],
+        //       [7, 8]]
+        //
+        // AD = [[10, 20],
+        //       [30, 40]]
+        //
+        // AC = [[9, 8],
+        //       [7, 6]]
+        let product = MatrixCiphertextProduct::new(
+            filled_encoded(2, 2, 1, &[1, 3, 2, 4]),
+            filled_encoded(2, 2, 1, &[5, 7, 6, 8]),
+            filled_encoded(2, 2, 1, &[10, 30, 20, 40]),
+            filled_encoded(2, 2, 1, &[9, 7, 8, 6]),
+        );
+
+        let quadratic = product.combine_degree_two();
+
+        assert_eq!(quadratic.c0(), &filled_encoded(2, 2, 1, &[1, 3, 2, 4]));
+
+        // c1 = BC + AD
+        assert_eq!(quadratic.c1(), &filled_encoded(2, 2, 1, &[15, 37, 26, 48]));
+
+        assert_eq!(quadratic.c2(), &filled_encoded(2, 2, 1, &[9, 7, 8, 6]));
+
+        assert_eq!(quadratic.rows(), 2);
+        assert_eq!(quadratic.cols(), 2);
+        assert_eq!(quadratic.batches(), 1);
     }
 
     #[test]
