@@ -15,18 +15,10 @@ use super::subring::SubringPolynomial;
 pub struct ToeplitzOperator<T> {
     d: usize,
     blocks: Vec<SubringPolynomial<T>>,
-    generator: Option<SubringPolynomial<T>>,
+    generator: Option<Vec<SubringPolynomial<T>>>,
 }
 
-impl<T> ToeplitzOperator<T>
-where
-    T: Clone
-        + Default
-        + std::ops::Mul<Output = T>
-        + std::ops::Add<Output = T>
-        + std::ops::AddAssign
-        + std::ops::SubAssign,
-{
+impl<T> ToeplitzOperator<T> {
     /// Constructs a Toeplitz operator from its block representation.
     ///
     /// # Panics
@@ -46,7 +38,19 @@ where
         }
     }
 
-    pub fn from_generator(d: usize, generator: SubringPolynomial<T>) -> Self {
+    /// Constructs the wrapped Toeplitz operator from the decomposition
+    /// `(s_0, ..., s_{d-1})` of its generating polynomial.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the generator does not contain exactly `d` components.
+    pub fn from_generator(d: usize, generator: Vec<SubringPolynomial<T>>) -> Self {
+        assert_eq!(
+            generator.len(),
+            d,
+            "Toeplitz generator must contain exactly d subring polynomials"
+        );
+
         Self {
             d,
             blocks: Vec::new(),
@@ -54,8 +58,8 @@ where
         }
     }
 
-    pub fn generator(&self) -> Option<&SubringPolynomial<T>> {
-        self.generator.as_ref()
+    pub fn generator(&self) -> Option<&[SubringPolynomial<T>]> {
+        self.generator.as_deref()
     }
 
     /// Number of block rows/columns.
@@ -67,11 +71,28 @@ where
     pub fn blocks(&self) -> &[SubringPolynomial<T>] {
         &self.blocks
     }
+}
 
-    /// Applies the Toeplitz operator to a vector of subring polynomials.
+impl<T> ToeplitzOperator<T>
+where
+    T: Clone
+        + Default
+        + std::ops::Mul<Output = T>
+        + std::ops::Add<Output = T>
+        + std::ops::AddAssign
+        + std::ops::SubAssign
+        + std::ops::Neg<Output = T>,
+{
+    /// Applies the operator to a vector of subring polynomials.
     ///
-    /// The operator is interpreted as a block-circulant matrix whose first
-    /// column is given by `self.blocks`.
+    /// Generator-backed operators use the wrapped Toeplitz action
+    ///
+    /// `output[i] = sum_j s[(i - j) mod d] * input[j]`,
+    ///
+    /// with an additional factor of `Y` whenever `j > i`.
+    ///
+    /// Operators constructed with [`Self::new`] retain the original
+    /// block-circulant behavior.
     pub fn apply(&self, input: &[SubringPolynomial<T>]) -> Vec<SubringPolynomial<T>> {
         assert_eq!(
             input.len(),
@@ -79,14 +100,20 @@ where
             "input vector must contain exactly d subring polynomials"
         );
 
+        let source = self.generator.as_deref().unwrap_or(&self.blocks);
+        let wrapped = self.generator.is_some();
         let mut output = Vec::with_capacity(self.d);
 
         for row in 0..self.d {
             let mut accum: Option<SubringPolynomial<T>> = None;
 
             for (col, polynomial) in input.iter().enumerate() {
-                let block = &self.blocks[(row + self.d - col) % self.d];
-                let product = block.negacyclic_mul(polynomial);
+                let index = (row + self.d - col) % self.d;
+                let mut product = source[index].negacyclic_mul(polynomial);
+
+                if wrapped && col > row {
+                    product = product.mul_by_y();
+                }
 
                 accum = Some(match accum {
                     Some(sum) => sum.add(&product),
@@ -147,12 +174,86 @@ mod tests {
     }
 
     #[test]
-    fn generator_constructor_preserves_polynomial() {
-        let poly = SubringPolynomial::new(vec![1_i64, 2, 3]);
+    fn generator_constructor_preserves_components() {
+        let generator = vec![
+            SubringPolynomial::new(vec![1_i64, 2]),
+            SubringPolynomial::new(vec![3_i64, 4]),
+        ];
 
-        let toep = ToeplitzOperator::from_generator(4, poly.clone());
+        let operator = ToeplitzOperator::from_generator(2, generator.clone());
 
-        assert_eq!(toep.d(), 4);
-        assert_eq!(toep.generator(), Some(&poly));
+        assert_eq!(operator.d(), 2);
+        assert_eq!(operator.generator(), Some(generator.as_slice()));
+    }
+    #[test]
+    fn generator_action_multiplies_wrapped_terms_by_y() {
+        let generator = vec![
+            SubringPolynomial::new(vec![1_i64, 0]),
+            SubringPolynomial::new(vec![2_i64, 0]),
+        ];
+
+        let input = vec![
+            SubringPolynomial::new(vec![3_i64, 0]),
+            SubringPolynomial::new(vec![5_i64, 0]),
+        ];
+
+        let operator = ToeplitzOperator::from_generator(2, generator);
+        let output = operator.apply(&input);
+
+        assert_eq!(output[0].coefficients(), &[3, 10]);
+        assert_eq!(output[1].coefficients(), &[11, 0]);
+    }
+
+    /// Independent reference multiplication in Z[X] / (X^N + 1).
+    ///
+    /// This deliberately operates on full coefficient vectors rather than
+    /// using SubringPolynomial or ToeplitzOperator, so the identity test does
+    /// not validate the implementation against itself.
+    fn full_ring_negacyclic_mul(lhs: &[i64], rhs: &[i64]) -> Vec<i64> {
+        assert_eq!(lhs.len(), rhs.len());
+
+        let n = lhs.len();
+        let mut result = vec![0_i64; n];
+
+        for (i, &lhs_coeff) in lhs.iter().enumerate() {
+            for (j, &rhs_coeff) in rhs.iter().enumerate() {
+                let product = lhs_coeff * rhs_coeff;
+                let degree = i + j;
+
+                if degree < n {
+                    result[degree] += product;
+                } else {
+                    result[degree - n] -= product;
+                }
+            }
+        }
+
+        result
+    }
+
+    #[test]
+    fn toeplitz_vec_identity_matches_full_ring_multiplication() {
+        // R = Z[X] / (X^6 + 1), with d = 2, k = 3 and Y = X^2.
+        //
+        // Both inputs are deliberately dense so that the test exercises:
+        //   * multiplication within each R_k component,
+        //   * wrapped Toeplitz terms,
+        //   * multiplication by Y when a d-boundary is crossed,
+        //   * negacyclic reduction in both R_k and the full ring.
+        let decomposition = crate::linear_operator::subring::SubringDecomposition::new(2, 3);
+
+        let s = vec![1_i64, -2, 3, 4, -1, 2];
+        let a = vec![2_i64, 1, -3, 5, 4, -2];
+
+        let generator = decomposition.decompose(&s);
+        let input = decomposition.decompose(&a);
+
+        let operator = ToeplitzOperator::from_generator(decomposition.d(), generator);
+        let actual = operator.apply(&input);
+
+        let expected_coefficients = full_ring_negacyclic_mul(&s, &a);
+        let expected = decomposition.decompose(&expected_coefficients);
+
+        assert_eq!(actual, expected);
     }
 }
