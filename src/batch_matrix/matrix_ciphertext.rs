@@ -7,10 +7,110 @@ use super::mat_ecd::MatEcd;
 /// The ciphertext consists of two matrix components `(B, A)`. At this layer
 /// the type only enforces that both components have identical logical
 /// dimensions. Cryptographic operations are introduced separately.
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatrixCiphertext<T> {
     b: MatEcd<T>,
     a: MatEcd<T>,
+}
+
+/// Structural result of ciphertext-ciphertext matrix multiplication.
+///
+/// For ciphertexts `(B, A)` and `(D, C)`, the unreduced bilinear product
+/// contains four matrix products:
+///
+/// `(B * D, B * C, A * D, A * C)`.
+///
+/// This type deliberately preserves all four terms. Scheme-specific
+/// reduction, relinearization, or key switching is introduced separately.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatrixCiphertextProduct<T> {
+    bd: MatEcd<T>,
+    bc: MatEcd<T>,
+    ad: MatEcd<T>,
+    ac: MatEcd<T>,
+}
+
+impl<T> MatrixCiphertextProduct<T> {
+    pub fn new(bd: MatEcd<T>, bc: MatEcd<T>, ad: MatEcd<T>, ac: MatEcd<T>) -> Self {
+        assert_eq!(
+            bd.rows(),
+            bc.rows(),
+            "product terms must have matching row counts"
+        );
+        assert_eq!(
+            bd.rows(),
+            ad.rows(),
+            "product terms must have matching row counts"
+        );
+        assert_eq!(
+            bd.rows(),
+            ac.rows(),
+            "product terms must have matching row counts"
+        );
+
+        assert_eq!(
+            bd.cols(),
+            bc.cols(),
+            "product terms must have matching column counts"
+        );
+        assert_eq!(
+            bd.cols(),
+            ad.cols(),
+            "product terms must have matching column counts"
+        );
+        assert_eq!(
+            bd.cols(),
+            ac.cols(),
+            "product terms must have matching column counts"
+        );
+
+        assert_eq!(
+            bd.batches(),
+            bc.batches(),
+            "product terms must have matching batch counts"
+        );
+        assert_eq!(
+            bd.batches(),
+            ad.batches(),
+            "product terms must have matching batch counts"
+        );
+        assert_eq!(
+            bd.batches(),
+            ac.batches(),
+            "product terms must have matching batch counts"
+        );
+
+        Self { bd, bc, ad, ac }
+    }
+
+    pub fn bd(&self) -> &MatEcd<T> {
+        &self.bd
+    }
+
+    pub fn bc(&self) -> &MatEcd<T> {
+        &self.bc
+    }
+
+    pub fn ad(&self) -> &MatEcd<T> {
+        &self.ad
+    }
+
+    pub fn ac(&self) -> &MatEcd<T> {
+        &self.ac
+    }
+
+    pub fn rows(&self) -> usize {
+        self.bd.rows()
+    }
+
+    pub fn cols(&self) -> usize {
+        self.bd.cols()
+    }
+
+    pub fn batches(&self) -> usize {
+        self.bd.batches()
+    }
 }
 
 impl<T> MatrixCiphertext<T> {
@@ -97,6 +197,35 @@ where
 
         Self::new(self.b.matmul(plaintext), self.a.matmul(plaintext))
     }
+
+    /// Applies structural ciphertext-ciphertext matrix multiplication.
+    ///
+    /// For ciphertexts `(B, A)` and `(D, C)`, this computes the unreduced
+    /// bilinear product
+    ///
+    /// `(B * D, B * C, A * D, A * C)`.
+    ///
+    /// The four terms are preserved explicitly. Scheme-specific reduction,
+    /// relinearization, and key switching are introduced separately.
+    pub fn ccmm(&self, rhs: &Self) -> MatrixCiphertextProduct<T> {
+        assert_eq!(
+            self.batches(),
+            rhs.batches(),
+            "ciphertext batch counts must match"
+        );
+        assert_eq!(
+            self.cols(),
+            rhs.rows(),
+            "ciphertext matrix dimensions must be compatible"
+        );
+
+        MatrixCiphertextProduct::new(
+            self.b.matmul(&rhs.b),
+            self.b.matmul(&rhs.a),
+            self.a.matmul(&rhs.b),
+            self.a.matmul(&rhs.a),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +301,77 @@ mod tests {
         let plaintext = encoded(2, 2, 1);
 
         let _ = ciphertext.cpmm(&plaintext);
+    }
+
+    #[test]
+    fn ccmm_expands_all_four_bilinear_terms() {
+        // Left ciphertext:
+        // B = [[1, 2],
+        //      [3, 4]]
+        //
+        // A = [[5, 6],
+        //      [7, 8]]
+        //
+        // Right ciphertext:
+        // D = [[2, 0],
+        //      [1, 3]]
+        //
+        // C = [[4, 1],
+        //      [2, 5]]
+        //
+        // Matrices are stored column-major.
+        let b = filled_encoded(2, 2, 1, &[1, 3, 2, 4]);
+        let a = filled_encoded(2, 2, 1, &[5, 7, 6, 8]);
+        let d = filled_encoded(2, 2, 1, &[2, 1, 0, 3]);
+        let c = filled_encoded(2, 2, 1, &[4, 2, 1, 5]);
+
+        let lhs = MatrixCiphertext::new(b, a);
+        let rhs = MatrixCiphertext::new(d, c);
+
+        let result = lhs.ccmm(&rhs);
+
+        // B * D = [[4, 6],
+        //          [10, 12]]
+        let expected_bd = filled_encoded(2, 2, 1, &[4, 10, 6, 12]);
+
+        // B * C = [[8, 11],
+        //          [20, 23]]
+        let expected_bc = filled_encoded(2, 2, 1, &[8, 20, 11, 23]);
+
+        // A * D = [[16, 18],
+        //          [22, 24]]
+        let expected_ad = filled_encoded(2, 2, 1, &[16, 22, 18, 24]);
+
+        // A * C = [[32, 35],
+        //          [44, 47]]
+        let expected_ac = filled_encoded(2, 2, 1, &[32, 44, 35, 47]);
+
+        assert_eq!(result.bd(), &expected_bd);
+        assert_eq!(result.bc(), &expected_bc);
+        assert_eq!(result.ad(), &expected_ad);
+        assert_eq!(result.ac(), &expected_ac);
+
+        assert_eq!(result.rows(), 2);
+        assert_eq!(result.cols(), 2);
+        assert_eq!(result.batches(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "ciphertext batch counts must match")]
+    fn ccmm_rejects_mismatched_batch_counts() {
+        let lhs = MatrixCiphertext::new(encoded(2, 2, 1), encoded(2, 2, 1));
+        let rhs = MatrixCiphertext::new(encoded(2, 2, 2), encoded(2, 2, 2));
+
+        let _ = lhs.ccmm(&rhs);
+    }
+
+    #[test]
+    #[should_panic(expected = "ciphertext matrix dimensions must be compatible")]
+    fn ccmm_rejects_incompatible_dimensions() {
+        let lhs = MatrixCiphertext::new(encoded(2, 3, 1), encoded(2, 3, 1));
+        let rhs = MatrixCiphertext::new(encoded(2, 2, 1), encoded(2, 2, 1));
+
+        let _ = lhs.ccmm(&rhs);
     }
 
     #[test]
