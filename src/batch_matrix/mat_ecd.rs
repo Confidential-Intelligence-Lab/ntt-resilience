@@ -20,6 +20,37 @@ pub struct MatEcd<T> {
     data: Vec<T>,
 }
 
+impl<T> MatEcd<T> {
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    pub fn batches(&self) -> usize {
+        self.batches
+    }
+
+    pub fn raw(&self) -> &[T] {
+        &self.data
+    }
+
+    pub fn get(&self, batch: usize, row: usize, col: usize) -> &T {
+        let index = self.index(batch, row, col);
+        &self.data[index]
+    }
+
+    fn index(&self, batch: usize, row: usize, col: usize) -> usize {
+        assert!(batch < self.batches, "batch index out of bounds");
+        assert!(row < self.rows, "row index out of bounds");
+        assert!(col < self.cols, "column index out of bounds");
+
+        batch * self.rows * self.cols + row + col * self.rows
+    }
+}
+
 impl<T: Clone> MatEcd<T> {
     /// Encodes a batch matrix without changing coefficient values.
     pub fn encode(matrix: &BatchMatrix<T>) -> Self {
@@ -54,35 +85,6 @@ impl<T: Clone> MatEcd<T> {
         }
 
         matrix
-    }
-
-    pub fn rows(&self) -> usize {
-        self.rows
-    }
-
-    pub fn cols(&self) -> usize {
-        self.cols
-    }
-
-    pub fn batches(&self) -> usize {
-        self.batches
-    }
-
-    pub fn raw(&self) -> &[T] {
-        &self.data
-    }
-
-    pub fn get(&self, batch: usize, row: usize, col: usize) -> &T {
-        let index = self.index(batch, row, col);
-        &self.data[index]
-    }
-
-    fn index(&self, batch: usize, row: usize, col: usize) -> usize {
-        assert!(batch < self.batches, "batch index out of bounds");
-        assert!(row < self.rows, "row index out of bounds");
-        assert!(col < self.cols, "column index out of bounds");
-
-        batch * self.rows * self.cols + row + col * self.rows
     }
 }
 
