@@ -390,6 +390,69 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn deterministic_ccmm_cross_validation_case() {
+        // HEaaN oracle plaintext matrices:
+        //
+        // X = [[1, 2],      Y = [[5, 6],
+        //      [3, 4]]           [7, 8]]
+        //
+        // X * Y = [[19, 22],
+        //          [43, 50]]
+        //
+        // Split each plaintext matrix into structural ciphertext
+        // components such that X = B + A and Y = D + C. This is the
+        // ciphertext polynomial evaluated at the test point s = 1.
+        //
+        // Column-major storage is used throughout.
+
+        let b = filled_encoded(2, 2, 1, &[1_i64, 1, 1, 1]);
+        let a = filled_encoded(2, 2, 1, &[0_i64, 2, 1, 3]);
+
+        let d = filled_encoded(2, 2, 1, &[2_i64, 3, 3, 4]);
+        let c = filled_encoded(2, 2, 1, &[3_i64, 4, 3, 4]);
+
+        // B + A = [[1, 2], [3, 4]]
+        assert_eq!(b.add(&a).raw(), &[1, 3, 2, 4]);
+
+        // D + C = [[5, 6], [7, 8]]
+        assert_eq!(d.add(&c).raw(), &[5, 7, 6, 8]);
+
+        let lhs = MatrixCiphertext::new(b, a);
+        let rhs = MatrixCiphertext::new(d, c);
+
+        let product = lhs.ccmm(&rhs);
+
+        // Preserve the four independent bilinear blocks.
+        let bd = product.bd().clone();
+        let bc = product.bc().clone();
+        let ad = product.ad().clone();
+        let ac = product.ac().clone();
+
+        // Direct expansion at s = 1:
+        //
+        // BD + BC + AD + AC
+        //   = (B + A)(D + C)
+        //   = X * Y.
+        let expanded = bd.add(&bc).add(&ad).add(&ac);
+
+        assert_eq!(expanded.raw(), &[19, 43, 22, 50]);
+
+        // Now validate the exact degree-2 ciphertext representation.
+        let quadratic = product.combine_degree_two();
+
+        assert_eq!(quadratic.c0(), &bd);
+        assert_eq!(quadratic.c1(), &bc.add(&ad));
+        assert_eq!(quadratic.c2(), &ac);
+
+        // Evaluating c0 + c1*s + c2*s^2 at the same structural
+        // test point s = 1 must preserve the matrix product.
+        let quadratic_at_one = quadratic.c0().add(quadratic.c1()).add(quadratic.c2());
+
+        assert_eq!(quadratic_at_one.raw(), &[19, 43, 22, 50]);
+    }
+
     use super::*;
     use crate::batch_matrix::real_matrix::BatchMatrix;
 
