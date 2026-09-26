@@ -5,13 +5,13 @@
 use num_complex::Complex64;
 use std::f64::consts::PI;
 
-use crate::fault::{inject_bit_fault, FaultSpec};
+use crate::fault::FaultSpec;
 use crate::metrics::{decoded_metrics, DecodedMetrics};
 use crate::mitigation::{MitigationMetrics, MitigationOptions};
 use crate::modarith::{centered, from_centered, mul_mod};
 use crate::ntt::{
-    execute_ntt, mul_ntt, NttDirection, NttExecutionConfig, NttImplementation, NttSystemMetrics,
-    StageTrace,
+    execute_ntt, execute_ntt_pointwise_mul, NttDirection, NttExecutionConfig, NttImplementation,
+    NttPointwiseMulConfig, NttSystemMetrics, StageTrace,
 };
 use crate::params::RingParams;
 
@@ -375,37 +375,22 @@ impl CkksToyContext {
         )?;
 
         // For CKKS pipeline experiments, a `mul` fault means a fault in one of the
-        // pointwise multiplication operands in the NTT domain. This is intentionally
-        // different from an iNTT-stage-0 fault, which targets the product vector
-        // `c_hat` immediately before inverse transformation.
-        if fault_op == Some("mul") {
-            if let Some(spec) = fault {
-                match spec.operand {
-                    crate::fault::FaultOperand::A => {
-                        inject_bit_fault(
-                            &mut a_hat,
-                            spec.slot,
-                            spec.bit,
-                            self.params.modulus_bits,
-                            q,
-                        )?;
-                        direct_fault_injections += 1;
-                    }
-                    crate::fault::FaultOperand::B => {
-                        inject_bit_fault(
-                            &mut b_hat,
-                            spec.slot,
-                            spec.bit,
-                            self.params.modulus_bits,
-                            q,
-                        )?;
-                        direct_fault_injections += 1;
-                    }
-                }
-            }
-        }
+        // pointwise multiplication operands in the NTT domain. This remains
+        // intentionally different from an iNTT-stage-0 fault, which targets the
+        // product vector `c_hat` immediately before inverse transformation.
+        let mul_fault = if fault_op == Some("mul") {
+            fault_spec
+        } else {
+            None
+        };
 
-        let c_hat = mul_ntt(&a_hat, &b_hat, q);
+        let mul_config = NttPointwiseMulConfig {
+            fault: mul_fault.cloned(),
+        };
+
+        let (c_hat, mul_fault_injections) =
+            execute_ntt_pointwise_mul(&mut a_hat, &mut b_hat, &self.params, &mul_config)?;
+        direct_fault_injections += mul_fault_injections;
 
         let intt_fault = if fault_op == Some("intt") {
             fault_spec

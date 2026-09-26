@@ -102,6 +102,18 @@ pub struct NttExecutionConfig {
     pub fault: Option<FaultSpec>,
 }
 
+/// Configuration for one pointwise multiplication in the NTT domain.
+///
+/// R1c preserves the historical CKKS fault semantics exactly: when a fault is
+/// supplied, the selected input operand is corrupted at `slot`/`bit` before
+/// pointwise multiplication. Stage, site, adjacency, and secondary-fault
+/// fields are intentionally not interpreted here because the historical CKKS
+/// pointwise-multiplication path did not interpret them either.
+#[derive(Debug, Clone)]
+pub struct NttPointwiseMulConfig {
+    pub fault: Option<FaultSpec>,
+}
+
 pub fn ntt(a: &[u64], params: &RingParams, trace: bool) -> (Vec<u64>, Vec<StageTrace>) {
     ntt_with_impl(a, params, trace, NttImplementation::Radix2, None)
         .expect("radix2 NTT should not fail without faults")
@@ -2015,6 +2027,37 @@ pub fn add_ntt(a: &[u64], b: &[u64], q: u64) -> Vec<u64> {
     a.iter().zip(b).map(|(&x, &y)| add_mod(x, y, q)).collect()
 }
 
+/// Execute pointwise multiplication in the NTT domain with the historical
+/// CKKS operand-fault semantics.
+///
+/// The input slices are mutable because the original CKKS implementation
+/// injected the fault directly into `a_hat` or `b_hat` before multiplication,
+/// and those post-injection operands are part of the observable execution
+/// trace. The returned counter reports actual injections performed.
+pub fn execute_ntt_pointwise_mul(
+    a: &mut [u64],
+    b: &mut [u64],
+    params: &RingParams,
+    config: &NttPointwiseMulConfig,
+) -> Result<(Vec<u64>, u64), String> {
+    let mut fault_injections = 0u64;
+
+    if let Some(spec) = config.fault.as_ref() {
+        match spec.operand {
+            crate::fault::FaultOperand::A => {
+                inject_bit_fault(a, spec.slot, spec.bit, params.modulus_bits, params.modulus)?;
+                fault_injections += 1;
+            }
+            crate::fault::FaultOperand::B => {
+                inject_bit_fault(b, spec.slot, spec.bit, params.modulus_bits, params.modulus)?;
+                fault_injections += 1;
+            }
+        }
+    }
+
+    Ok((mul_ntt(a, b, params.modulus), fault_injections))
+}
+
 pub fn mul_ntt(a: &[u64], b: &[u64], q: u64) -> Vec<u64> {
     a.iter().zip(b).map(|(&x, &y)| mul_mod(x, y, q)).collect()
 }
@@ -2528,6 +2571,153 @@ mod tests {
         assert!(wrapped_mitigation.fault_detected);
         assert!(wrapped_mitigation.fault_corrected);
         assert!(wrapped_mitigation.recomputations > 0);
+    }
+    fn legacy_pointwise_mul_with_optional_fault(
+        a: &mut [u64],
+        b: &mut [u64],
+        params: &RingParams,
+        fault: Option<&FaultSpec>,
+    ) -> Result<(Vec<u64>, u64), String> {
+        let mut fault_injections = 0u64;
+
+        if let Some(spec) = fault {
+            match spec.operand {
+                crate::fault::FaultOperand::A => {
+                    crate::fault::inject_bit_fault(
+                        a,
+                        spec.slot,
+                        spec.bit,
+                        params.modulus_bits,
+                        params.modulus,
+                    )?;
+                    fault_injections += 1;
+                }
+                crate::fault::FaultOperand::B => {
+                    crate::fault::inject_bit_fault(
+                        b,
+                        spec.slot,
+                        spec.bit,
+                        params.modulus_bits,
+                        params.modulus,
+                    )?;
+                    fault_injections += 1;
+                }
+            }
+        }
+
+        Ok((mul_ntt(a, b, params.modulus), fault_injections))
+    }
+
+    #[test]
+    fn pointwise_mul_abstraction_matches_legacy_without_fault() {
+        let params = RingParams::new(16, 24).expect("valid params");
+
+        let original_a: Vec<u64> = (0..params.n)
+            .map(|i| ((19 * i + 3) as u64) % params.modulus)
+            .collect();
+        let original_b: Vec<u64> = (0..params.n)
+            .map(|i| ((23 * i + 5) as u64) % params.modulus)
+            .collect();
+
+        let mut legacy_a = original_a.clone();
+        let mut legacy_b = original_b.clone();
+        let legacy =
+            legacy_pointwise_mul_with_optional_fault(&mut legacy_a, &mut legacy_b, &params, None)
+                .expect("legacy pointwise multiply should succeed");
+
+        let mut wrapped_a = original_a;
+        let mut wrapped_b = original_b;
+        let config = NttPointwiseMulConfig { fault: None };
+
+        let wrapped = execute_ntt_pointwise_mul(&mut wrapped_a, &mut wrapped_b, &params, &config)
+            .expect("pointwise abstraction should succeed");
+
+        assert_eq!(legacy_a, wrapped_a);
+        assert_eq!(legacy_b, wrapped_b);
+        assert_eq!(legacy.0, wrapped.0);
+        assert_eq!(legacy.1, wrapped.1);
+        assert_eq!(wrapped.1, 0);
+    }
+
+    #[test]
+    fn pointwise_mul_abstraction_matches_legacy_operand_a_fault() {
+        let params = RingParams::new(16, 24).expect("valid params");
+
+        let original_a: Vec<u64> = (0..params.n)
+            .map(|i| ((29 * i + 7) as u64) % params.modulus)
+            .collect();
+        let original_b: Vec<u64> = (0..params.n)
+            .map(|i| ((31 * i + 11) as u64) % params.modulus)
+            .collect();
+
+        let mut fault = FaultSpec::new(crate::fault::FaultOperand::A, 7, 3, 4);
+        fault.site = FaultSite::RegisterWrite;
+        fault.adjacent = true;
+        fault.second_enabled = true;
+        fault.second_slot = 5;
+        fault.second_bit = 2;
+
+        // The historical CKKS pointwise path ignores stage/site/adjacency/
+        // secondary-fault metadata and uses only operand, slot, and bit.
+        let mut legacy_a = original_a.clone();
+        let mut legacy_b = original_b.clone();
+        let legacy = legacy_pointwise_mul_with_optional_fault(
+            &mut legacy_a,
+            &mut legacy_b,
+            &params,
+            Some(&fault),
+        )
+        .expect("legacy pointwise multiply should succeed");
+
+        let mut wrapped_a = original_a;
+        let mut wrapped_b = original_b;
+        let config = NttPointwiseMulConfig { fault: Some(fault) };
+
+        let wrapped = execute_ntt_pointwise_mul(&mut wrapped_a, &mut wrapped_b, &params, &config)
+            .expect("pointwise abstraction should succeed");
+
+        assert_eq!(legacy_a, wrapped_a);
+        assert_eq!(legacy_b, wrapped_b);
+        assert_eq!(legacy.0, wrapped.0);
+        assert_eq!(legacy.1, wrapped.1);
+        assert_eq!(wrapped.1, 1);
+    }
+
+    #[test]
+    fn pointwise_mul_abstraction_matches_legacy_operand_b_fault() {
+        let params = RingParams::new(16, 24).expect("valid params");
+
+        let original_a: Vec<u64> = (0..params.n)
+            .map(|i| ((37 * i + 13) as u64) % params.modulus)
+            .collect();
+        let original_b: Vec<u64> = (0..params.n)
+            .map(|i| ((41 * i + 17) as u64) % params.modulus)
+            .collect();
+
+        let fault = FaultSpec::new(crate::fault::FaultOperand::B, 0, 2, 3);
+
+        let mut legacy_a = original_a.clone();
+        let mut legacy_b = original_b.clone();
+        let legacy = legacy_pointwise_mul_with_optional_fault(
+            &mut legacy_a,
+            &mut legacy_b,
+            &params,
+            Some(&fault),
+        )
+        .expect("legacy pointwise multiply should succeed");
+
+        let mut wrapped_a = original_a;
+        let mut wrapped_b = original_b;
+        let config = NttPointwiseMulConfig { fault: Some(fault) };
+
+        let wrapped = execute_ntt_pointwise_mul(&mut wrapped_a, &mut wrapped_b, &params, &config)
+            .expect("pointwise abstraction should succeed");
+
+        assert_eq!(legacy_a, wrapped_a);
+        assert_eq!(legacy_b, wrapped_b);
+        assert_eq!(legacy.0, wrapped.0);
+        assert_eq!(legacy.1, wrapped.1);
+        assert_eq!(wrapped.1, 1);
     }
 }
 
