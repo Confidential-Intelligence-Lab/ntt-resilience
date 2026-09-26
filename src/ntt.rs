@@ -81,7 +81,6 @@ pub struct StageTrace {
     pub faulted: bool,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NttDirection {
     Forward,
@@ -94,7 +93,6 @@ pub enum NttDirection {
 /// backend-specific fault and mitigation semantics of the existing execution
 /// paths. In particular, selecting a mitigation does not imply that every NTT
 /// implementation provides that mitigation.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct NttExecutionConfig {
     pub direction: NttDirection,
@@ -683,7 +681,6 @@ pub fn intt_with_impl_and_mitigation(
 /// the existing implementation-and-mitigation entry points so that historical
 /// fault coordinates, mitigation behavior, metrics, and FDTC experiment
 /// semantics remain unchanged.
-#[allow(dead_code)]
 pub fn execute_ntt(
     input: &[u64],
     params: &RingParams,

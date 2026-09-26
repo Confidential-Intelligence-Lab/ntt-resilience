@@ -9,7 +9,10 @@ use crate::fault::{inject_bit_fault, FaultSpec};
 use crate::metrics::{decoded_metrics, DecodedMetrics};
 use crate::mitigation::{MitigationMetrics, MitigationOptions};
 use crate::modarith::{centered, from_centered, mul_mod};
-use crate::ntt::{mul_ntt, NttImplementation, NttSystemMetrics, StageTrace};
+use crate::ntt::{
+    execute_ntt, mul_ntt, NttDirection, NttExecutionConfig, NttImplementation, NttSystemMetrics,
+    StageTrace,
+};
 use crate::params::RingParams;
 
 #[derive(Debug, Clone)]
@@ -329,15 +332,20 @@ impl CkksToyContext {
             None
         };
 
-        let (mut a_hat, ntt_stages) = crate::ntt::ntt_with_impl_and_mitigation(
+        let a_ntt_config = NttExecutionConfig {
+            direction: NttDirection::Forward,
+            trace: ntt_trace_enabled,
+            implementation: self.ntt_impl,
+            mitigation: self.mitigation.clone(),
+            fault: a_fault.cloned(),
+        };
+
+        let (mut a_hat, ntt_stages) = execute_ntt(
             &ta,
             &self.params,
-            ntt_trace_enabled,
-            self.ntt_impl,
+            &a_ntt_config,
             Some(&mut *system_metrics),
-            &self.mitigation,
             mitigation_metrics,
-            a_fault,
         )?;
 
         let b_fault = if fault_op == Some("ntt")
@@ -350,15 +358,20 @@ impl CkksToyContext {
             None
         };
 
-        let (mut b_hat, b_stages) = crate::ntt::ntt_with_impl_and_mitigation(
+        let b_ntt_config = NttExecutionConfig {
+            direction: NttDirection::Forward,
+            trace: ntt_trace_enabled,
+            implementation: self.ntt_impl,
+            mitigation: self.mitigation.clone(),
+            fault: b_fault.cloned(),
+        };
+
+        let (mut b_hat, b_stages) = execute_ntt(
             &tb,
             &self.params,
-            ntt_trace_enabled,
-            self.ntt_impl,
+            &b_ntt_config,
             Some(&mut *system_metrics),
-            &self.mitigation,
             mitigation_metrics,
-            b_fault,
         )?;
 
         // For CKKS pipeline experiments, a `mul` fault means a fault in one of the
@@ -400,15 +413,20 @@ impl CkksToyContext {
             None
         };
 
-        let (mut c, intt_stages) = crate::ntt::intt_with_impl_and_mitigation(
+        let intt_config = NttExecutionConfig {
+            direction: NttDirection::Inverse,
+            trace: intt_trace_enabled,
+            implementation: self.ntt_impl,
+            mitigation: self.mitigation.clone(),
+            fault: intt_fault.cloned(),
+        };
+
+        let (mut c, intt_stages) = execute_ntt(
             &c_hat,
             &self.params,
-            intt_trace_enabled,
-            self.ntt_impl,
+            &intt_config,
             Some(&mut *system_metrics),
-            &self.mitigation,
             mitigation_metrics,
-            intt_fault,
         )?;
 
         for i in 0..n {
