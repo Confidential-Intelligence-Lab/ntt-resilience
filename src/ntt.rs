@@ -81,6 +81,29 @@ pub struct StageTrace {
     pub faulted: bool,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NttDirection {
+    Forward,
+    Inverse,
+}
+
+/// Configuration for one NTT/iNTT execution.
+///
+/// This is an orchestration abstraction only. It intentionally preserves the
+/// backend-specific fault and mitigation semantics of the existing execution
+/// paths. In particular, selecting a mitigation does not imply that every NTT
+/// implementation provides that mitigation.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct NttExecutionConfig {
+    pub direction: NttDirection,
+    pub trace: bool,
+    pub implementation: NttImplementation,
+    pub mitigation: MitigationOptions,
+    pub fault: Option<FaultSpec>,
+}
+
 pub fn ntt(a: &[u64], params: &RingParams, trace: bool) -> (Vec<u64>, Vec<StageTrace>) {
     ntt_with_impl(a, params, trace, NttImplementation::Radix2, None)
         .expect("radix2 NTT should not fail without faults")
@@ -651,6 +674,44 @@ pub fn intt_with_impl_and_mitigation(
         ))
     } else {
         transform_with_impl(a, params, true, trace, fault, implementation, metrics)
+    }
+}
+
+/// Execute one forward or inverse NTT through the canonical resilience path.
+///
+/// R1a deliberately contains no transform logic of its own. It delegates to
+/// the existing implementation-and-mitigation entry points so that historical
+/// fault coordinates, mitigation behavior, metrics, and FDTC experiment
+/// semantics remain unchanged.
+#[allow(dead_code)]
+pub fn execute_ntt(
+    input: &[u64],
+    params: &RingParams,
+    config: &NttExecutionConfig,
+    system_metrics: Option<&mut NttSystemMetrics>,
+    mitigation_metrics: &mut MitigationMetrics,
+) -> Result<(Vec<u64>, Vec<StageTrace>), String> {
+    match config.direction {
+        NttDirection::Forward => ntt_with_impl_and_mitigation(
+            input,
+            params,
+            config.trace,
+            config.implementation,
+            system_metrics,
+            &config.mitigation,
+            mitigation_metrics,
+            config.fault.as_ref(),
+        ),
+        NttDirection::Inverse => intt_with_impl_and_mitigation(
+            input,
+            params,
+            config.trace,
+            config.implementation,
+            system_metrics,
+            &config.mitigation,
+            mitigation_metrics,
+            config.fault.as_ref(),
+        ),
     }
 }
 
@@ -2216,6 +2277,260 @@ mod tests {
         assert_eq!(mitigation_metrics.check_failures, 0);
         assert_eq!(mitigation_metrics.stage_checksum_s1_failures, 0);
         assert_eq!(mitigation_metrics.stage_checksum_s2_failures, 0);
+    }
+    fn assert_stage_traces_equivalent(a: &[StageTrace], b: &[StageTrace]) {
+        assert_eq!(a.len(), b.len(), "trace length mismatch");
+        for (left, right) in a.iter().zip(b.iter()) {
+            assert_eq!(left.stage, right.stage);
+            assert_eq!(left.input, right.input);
+            assert_eq!(left.output, right.output);
+            assert_eq!(left.faulted, right.faulted);
+        }
+    }
+
+    fn assert_system_metrics_equivalent(a: &NttSystemMetrics, b: &NttSystemMetrics) {
+        // elapsed_ns is intentionally excluded because wall-clock time is
+        // nondeterministic. All structural counters must remain identical.
+        assert_eq!(a.ntt_impl, b.ntt_impl);
+        assert_eq!(a.input_bytes, b.input_bytes);
+        assert_eq!(a.output_bytes, b.output_bytes);
+        assert_eq!(a.scratch_bytes, b.scratch_bytes);
+        assert_eq!(a.twiddle_table_bytes, b.twiddle_table_bytes);
+        assert_eq!(a.num_mod_adds, b.num_mod_adds);
+        assert_eq!(a.num_mod_subs, b.num_mod_subs);
+        assert_eq!(a.num_mod_muls, b.num_mod_muls);
+        assert_eq!(a.num_twiddle_loads, b.num_twiddle_loads);
+        assert_eq!(a.num_stage_barriers, b.num_stage_barriers);
+        assert_eq!(a.num_memory_reads, b.num_memory_reads);
+        assert_eq!(a.num_memory_writes, b.num_memory_writes);
+        assert_eq!(a.num_passes, b.num_passes);
+        assert_eq!(a.num_buffer_swaps, b.num_buffer_swaps);
+        assert_eq!(a.num_blocks, b.num_blocks);
+        assert_eq!(a.block_bytes, b.block_bytes);
+    }
+
+    fn assert_mitigation_metrics_equivalent(a: &MitigationMetrics, b: &MitigationMetrics) {
+        // mitigation_elapsed_ns is intentionally excluded because it is a
+        // wall-clock measurement.
+        assert_eq!(a.mitigation_enabled, b.mitigation_enabled);
+        assert_eq!(a.mitigation_kind, b.mitigation_kind);
+        assert_eq!(a.mitigation_action, b.mitigation_action);
+        assert_eq!(a.checksum_mode, b.checksum_mode);
+        assert_eq!(a.checks_performed, b.checks_performed);
+        assert_eq!(a.check_failures, b.check_failures);
+        assert_eq!(a.recomputations, b.recomputations);
+        assert_eq!(a.fault_detected, b.fault_detected);
+        assert_eq!(a.fault_corrected, b.fault_corrected);
+        assert_eq!(a.fault_injections, b.fault_injections);
+        assert_eq!(a.stage_checks_performed, b.stage_checks_performed);
+        assert_eq!(a.stage_check_failures, b.stage_check_failures);
+        assert_eq!(a.stage_checksum_s1_failures, b.stage_checksum_s1_failures);
+        assert_eq!(a.stage_checksum_s2_failures, b.stage_checksum_s2_failures);
+    }
+
+    #[test]
+    fn execution_abstraction_matches_legacy_all_backends() {
+        let params = RingParams::new(16, 24).expect("valid params");
+        let input: Vec<u64> = (0..params.n)
+            .map(|i| ((17 * i + 3) as u64) % params.modulus)
+            .collect();
+
+        let implementations = [
+            NttImplementation::Radix2,
+            NttImplementation::DifRadix2,
+            NttImplementation::Stockham,
+            NttImplementation::Radix4,
+            NttImplementation::FourStep,
+            NttImplementation::Naive,
+        ];
+
+        let directions = [NttDirection::Forward, NttDirection::Inverse];
+
+        for implementation in implementations {
+            for direction in directions {
+                let mitigation = MitigationOptions::disabled();
+
+                let mut legacy_system = NttSystemMetrics::default();
+                let mut legacy_mitigation = MitigationMetrics::default();
+
+                let legacy = match direction {
+                    NttDirection::Forward => ntt_with_impl_and_mitigation(
+                        &input,
+                        &params,
+                        true,
+                        implementation,
+                        Some(&mut legacy_system),
+                        &mitigation,
+                        &mut legacy_mitigation,
+                        None,
+                    ),
+                    NttDirection::Inverse => intt_with_impl_and_mitigation(
+                        &input,
+                        &params,
+                        true,
+                        implementation,
+                        Some(&mut legacy_system),
+                        &mitigation,
+                        &mut legacy_mitigation,
+                        None,
+                    ),
+                }
+                .expect("legacy execution should succeed");
+
+                let config = NttExecutionConfig {
+                    direction,
+                    trace: true,
+                    implementation,
+                    mitigation: mitigation.clone(),
+                    fault: None,
+                };
+
+                let mut wrapped_system = NttSystemMetrics::default();
+                let mut wrapped_mitigation = MitigationMetrics::default();
+
+                let wrapped = execute_ntt(
+                    &input,
+                    &params,
+                    &config,
+                    Some(&mut wrapped_system),
+                    &mut wrapped_mitigation,
+                )
+                .expect("execution abstraction should succeed");
+
+                assert_eq!(
+                    legacy.0, wrapped.0,
+                    "output mismatch for {implementation:?} {direction:?}"
+                );
+                assert_stage_traces_equivalent(&legacy.1, &wrapped.1);
+                assert_system_metrics_equivalent(&legacy_system, &wrapped_system);
+                assert_mitigation_metrics_equivalent(&legacy_mitigation, &wrapped_mitigation);
+            }
+        }
+    }
+
+    #[test]
+    fn execution_abstraction_preserves_radix2_fault_detection() {
+        let params = RingParams::new(16, 24).expect("valid params");
+        let input: Vec<u64> = (0..params.n)
+            .map(|i| ((13 * i + 7) as u64) % params.modulus)
+            .collect();
+
+        let mut fault = FaultSpec::new(crate::fault::FaultOperand::A, 0, 1, 0);
+        fault.site = FaultSite::MulOutput;
+
+        let mitigation = MitigationOptions {
+            kind: MitigationKind::ButterflyCheck,
+            action: MitigationAction::DetectOnly,
+            max_retries: 1,
+            checksum_mode: ChecksumMode::Sum,
+        };
+
+        let mut legacy_system = NttSystemMetrics::default();
+        let mut legacy_mitigation = MitigationMetrics::default();
+
+        let legacy = ntt_with_impl_and_mitigation(
+            &input,
+            &params,
+            true,
+            NttImplementation::Radix2,
+            Some(&mut legacy_system),
+            &mitigation,
+            &mut legacy_mitigation,
+            Some(&fault),
+        )
+        .expect("legacy protected execution should succeed");
+
+        let config = NttExecutionConfig {
+            direction: NttDirection::Forward,
+            trace: true,
+            implementation: NttImplementation::Radix2,
+            mitigation: mitigation.clone(),
+            fault: Some(fault),
+        };
+
+        let mut wrapped_system = NttSystemMetrics::default();
+        let mut wrapped_mitigation = MitigationMetrics::default();
+
+        let wrapped = execute_ntt(
+            &input,
+            &params,
+            &config,
+            Some(&mut wrapped_system),
+            &mut wrapped_mitigation,
+        )
+        .expect("execution abstraction should succeed");
+
+        assert_eq!(legacy.0, wrapped.0);
+        assert_stage_traces_equivalent(&legacy.1, &wrapped.1);
+        assert_system_metrics_equivalent(&legacy_system, &wrapped_system);
+        assert_mitigation_metrics_equivalent(&legacy_mitigation, &wrapped_mitigation);
+
+        assert_eq!(wrapped_mitigation.fault_injections, 1);
+        assert!(wrapped_mitigation.fault_detected);
+        assert!(!wrapped_mitigation.fault_corrected);
+    }
+
+    #[test]
+    fn execution_abstraction_preserves_radix2_recovery() {
+        let params = RingParams::new(16, 24).expect("valid params");
+        let input: Vec<u64> = (0..params.n)
+            .map(|i| ((11 * i + 5) as u64) % params.modulus)
+            .collect();
+
+        let mut fault = FaultSpec::new(crate::fault::FaultOperand::A, 0, 1, 0);
+        fault.site = FaultSite::MulOutput;
+
+        let mitigation = MitigationOptions {
+            kind: MitigationKind::ButterflyCheck,
+            action: MitigationAction::Recompute,
+            max_retries: 1,
+            checksum_mode: ChecksumMode::Sum,
+        };
+
+        let mut legacy_system = NttSystemMetrics::default();
+        let mut legacy_mitigation = MitigationMetrics::default();
+
+        let legacy = ntt_with_impl_and_mitigation(
+            &input,
+            &params,
+            true,
+            NttImplementation::Radix2,
+            Some(&mut legacy_system),
+            &mitigation,
+            &mut legacy_mitigation,
+            Some(&fault),
+        )
+        .expect("legacy recovery execution should succeed");
+
+        let config = NttExecutionConfig {
+            direction: NttDirection::Forward,
+            trace: true,
+            implementation: NttImplementation::Radix2,
+            mitigation: mitigation.clone(),
+            fault: Some(fault),
+        };
+
+        let mut wrapped_system = NttSystemMetrics::default();
+        let mut wrapped_mitigation = MitigationMetrics::default();
+
+        let wrapped = execute_ntt(
+            &input,
+            &params,
+            &config,
+            Some(&mut wrapped_system),
+            &mut wrapped_mitigation,
+        )
+        .expect("execution abstraction should succeed");
+
+        assert_eq!(legacy.0, wrapped.0);
+        assert_stage_traces_equivalent(&legacy.1, &wrapped.1);
+        assert_system_metrics_equivalent(&legacy_system, &wrapped_system);
+        assert_mitigation_metrics_equivalent(&legacy_mitigation, &wrapped_mitigation);
+
+        assert_eq!(wrapped_mitigation.fault_injections, 1);
+        assert!(wrapped_mitigation.fault_detected);
+        assert!(wrapped_mitigation.fault_corrected);
+        assert!(wrapped_mitigation.recomputations > 0);
     }
 }
 
