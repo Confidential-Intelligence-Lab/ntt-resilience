@@ -5,6 +5,7 @@
 use num_complex::Complex64;
 use std::f64::consts::PI;
 
+use crate::evidence::ExecutionEvidence;
 use crate::fault::FaultSpec;
 use crate::metrics::{decoded_metrics, DecodedMetrics};
 use crate::mitigation::{MitigationMetrics, MitigationOptions};
@@ -76,6 +77,10 @@ pub struct CkksDemoResult {
     pub system_metrics: NttSystemMetrics,
     pub mitigation_metrics: MitigationMetrics,
     pub fault_injections: u64,
+    // Transitional R1d-b allowance: evidence is populated in parallel with
+    // legacy accounting and becomes a production consumer interface in R1d-c.
+    #[allow(dead_code)]
+    pub evidence: ExecutionEvidence,
     pub trace: CkksExecutionTrace,
 }
 
@@ -276,6 +281,19 @@ impl CkksToyContext {
             }
         }
 
+        let fault_requested = fault_op.is_some() && fault.is_some();
+        let fault_injections = faulty_run.fault_injections;
+        let golden_match = metrics.max_abs_error == 0.0 && metrics.rms_error == 0.0;
+        let outcome_observable = fault_requested && fault_injections > 0 && !golden_match;
+
+        let evidence = ExecutionEvidence::classify(
+            fault_requested,
+            fault_injections,
+            mitigation_metrics.fault_detected,
+            mitigation_metrics.fault_corrected,
+            outcome_observable,
+        );
+
         Ok(CkksDemoResult {
             input_a: a_slots.to_vec(),
             input_b: b_slots.to_vec(),
@@ -284,7 +302,8 @@ impl CkksToyContext {
             metrics,
             system_metrics,
             mitigation_metrics,
-            fault_injections: faulty_run.fault_injections,
+            fault_injections,
+            evidence,
             trace,
         })
     }
@@ -782,5 +801,105 @@ mod tests {
 
         assert_eq!(result.fault_injections, 0);
         assert_eq!(result.decoded_correct, result.decoded_faulty);
+    }
+    #[test]
+    fn execution_evidence_matches_no_fault_legacy_semantics() {
+        let ctx = ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, None, None)
+            .expect("no-fault CKKS execution should run");
+
+        assert_eq!(result.fault_injections, result.evidence.fault_injections);
+        assert!(!result.evidence.fault_requested);
+        assert!(result.evidence.execution_valid);
+        assert!(!result.evidence.outcome_observable);
+        assert_eq!(
+            result.evidence.fault_detected,
+            result.mitigation_metrics.fault_detected
+        );
+        assert_eq!(
+            result.evidence.fault_corrected,
+            result.mitigation_metrics.fault_corrected
+        );
+    }
+
+    #[test]
+    fn execution_evidence_matches_injected_observable_legacy_semantics() {
+        let ctx = ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+        let fault = FaultSpec::new(FaultOperand::A, 0, 0, 8);
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
+            .expect("faulted CKKS execution should run");
+
+        let golden_match = result.metrics.max_abs_error == 0.0 && result.metrics.rms_error == 0.0;
+
+        assert_eq!(result.fault_injections, result.evidence.fault_injections);
+        assert!(result.evidence.fault_requested);
+        assert_eq!(result.evidence.execution_valid, result.fault_injections > 0);
+        assert_eq!(
+            result.evidence.outcome_observable,
+            result.fault_injections > 0 && !golden_match
+        );
+        assert_eq!(
+            result.evidence.fault_detected,
+            result.mitigation_metrics.fault_detected
+        );
+        assert_eq!(
+            result.evidence.fault_corrected,
+            result.mitigation_metrics.fault_corrected
+        );
+    }
+
+    #[test]
+    fn execution_evidence_classifies_unmatched_fault_as_invalid() {
+        let ctx = mitigation_ctx();
+        let (a, b) = demo_slots(ctx.params.n);
+
+        // Stage-0 MulOutput is produced only at hi positions 1, 3, 5, ...
+        let fault = fault_at(FaultOperand::A, 0, 0, 0, crate::fault::FaultSite::MulOutput);
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
+            .expect("unmatched fault experiment should execute");
+
+        assert_eq!(result.fault_injections, 0);
+        assert!(result.evidence.fault_requested);
+        assert!(!result.evidence.execution_valid);
+        assert!(!result.evidence.outcome_observable);
+    }
+
+    #[test]
+    fn execution_evidence_preserves_detection_and_recovery() {
+        let params = RingParams::new(16, 24).expect("valid test params");
+        let ctx = CkksToyContext::new_with_impl(params, 10, NttImplementation::Radix2)
+            .with_mitigation(crate::mitigation::MitigationOptions {
+                kind: crate::mitigation::MitigationKind::ButterflyCheck,
+                action: crate::mitigation::MitigationAction::Recompute,
+                max_retries: 1,
+                checksum_mode: crate::mitigation::ChecksumMode::Sum,
+            });
+
+        let (a, b) = demo_slots(ctx.params.n);
+        let mut fault = FaultSpec::new(FaultOperand::A, 0, 1, 0);
+        fault.site = crate::fault::FaultSite::MulOutput;
+
+        let result = ctx
+            .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
+            .expect("protected CKKS execution should run");
+
+        assert_eq!(
+            result.evidence.fault_detected,
+            result.mitigation_metrics.fault_detected
+        );
+        assert_eq!(
+            result.evidence.fault_corrected,
+            result.mitigation_metrics.fault_corrected
+        );
+        assert!(result.evidence.fault_detected);
+        assert!(result.evidence.fault_corrected);
     }
 }

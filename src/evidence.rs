@@ -17,9 +17,6 @@
 /// R1d-a is intentionally descriptive rather than prescriptive: it records
 /// observations already represented elsewhere in the system without changing
 /// their historical semantics.
-// Transitional R1d-a allowance: this vocabulary is intentionally introduced
-// before production producers/consumers migrate to it. Remove in R1d-b.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ExecutionEvidence {
     /// Whether the experiment requested fault injection.
@@ -50,8 +47,6 @@ pub struct ExecutionEvidence {
     pub execution_valid: bool,
 }
 
-// Transitional R1d-a allowance: production use begins in R1d-b.
-#[allow(dead_code)]
 impl ExecutionEvidence {
     /// Construct evidence from independently observed experiment facts.
     ///
@@ -86,6 +81,9 @@ impl ExecutionEvidence {
     ///
     /// This is an observation classification only. It is not a claim of
     /// resilience, security, detection, or correction.
+    // Transitional R1d-b allowance: this classifier becomes a production
+    // consumer helper when validation/reporting migrates in R1d-c.
+    #[allow(dead_code)]
     pub fn injected_but_not_observable(&self) -> bool {
         self.execution_valid
             && self.fault_requested
