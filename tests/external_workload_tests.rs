@@ -1,7 +1,7 @@
 use ntt_resilience::{
-    execute_ntt, execute_ntt_pointwise_mul, ExecutionEvidence, FaultOperand, FaultSpec,
-    MitigationMetrics, MitigationOptions, NttDirection, NttExecutionConfig, NttImplementation,
-    NttPointwiseMulConfig, NttSystemMetrics, RingParams,
+    execute_ntt, execute_ntt_pointwise_mul, EvidenceAccumulator, ExecutionEvidence, FaultOperand,
+    FaultSpec, MitigationMetrics, MitigationOptions, NttDirection, NttExecutionConfig,
+    NttImplementation, NttPointwiseMulConfig, NttSystemMetrics, RingParams,
 };
 
 #[derive(Debug)]
@@ -81,34 +81,24 @@ fn execute_mock_external_workload(
         &mut mitigation_inverse,
     )?;
 
-    let fault_injections = mitigation_a.fault_injections
-        + mitigation_b.fault_injections
-        + mitigation_inverse.fault_injections
-        + pointwise_injections;
+    let mut evidence_accumulator = EvidenceAccumulator::new(fault_requested);
 
-    let fault_detected = mitigation_a.fault_detected
-        || mitigation_b.fault_detected
-        || mitigation_inverse.fault_detected;
-
-    let fault_corrected = mitigation_a.fault_corrected
-        || mitigation_b.fault_corrected
-        || mitigation_inverse.fault_corrected;
-
-    aggregate_mitigation.fault_injections = fault_injections;
-    aggregate_mitigation.fault_detected = fault_detected;
-    aggregate_mitigation.fault_corrected = fault_corrected;
+    evidence_accumulator.observe_mitigation(&mitigation_a);
+    evidence_accumulator.observe_mitigation(&mitigation_b);
+    evidence_accumulator.observe_injections(pointwise_injections);
+    evidence_accumulator.observe_mitigation(&mitigation_inverse);
 
     let outcome_observable = golden_output
         .map(|golden| output.as_slice() != golden)
         .unwrap_or(false);
 
-    let evidence = ExecutionEvidence::classify(
-        fault_requested,
-        fault_injections,
-        fault_detected,
-        fault_corrected,
-        outcome_observable,
-    );
+    evidence_accumulator.observe_outcome(outcome_observable);
+
+    let evidence = evidence_accumulator.finalize();
+
+    aggregate_mitigation.fault_injections = evidence.fault_injections;
+    aggregate_mitigation.fault_detected = evidence.fault_detected;
+    aggregate_mitigation.fault_corrected = evidence.fault_corrected;
 
     Ok(MockWorkloadResult {
         output,

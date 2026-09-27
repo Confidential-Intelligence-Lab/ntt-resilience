@@ -13,7 +13,7 @@ pub mod ntt;
 pub mod params;
 pub mod validation;
 
-pub use evidence::ExecutionEvidence;
+pub use evidence::{EvidenceAccumulator, ExecutionEvidence};
 pub use fault::{FaultOperand, FaultSite, FaultSpec};
 pub use mitigation::{
     ChecksumMode, MitigationAction, MitigationKind, MitigationMetrics, MitigationOptions,

@@ -47,6 +47,74 @@ pub struct ExecutionEvidence {
     pub execution_valid: bool,
 }
 
+/// Aggregates operation-level resilience observations into one experiment-level
+/// [`ExecutionEvidence`] record.
+///
+/// The accumulator is intentionally workload-agnostic. It does not interpret
+/// CKKS, CCMM, RNS, or application semantics. Callers supply only:
+///
+/// - whether the experiment requested fault injection;
+/// - actual injection counts observed across operations;
+/// - detection/correction observations from mitigation layers; and
+/// - whether the final workload outcome remained observably different from
+///   the selected golden/reference outcome.
+///
+/// This keeps experiment-level classification separate from workload-specific
+/// computation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvidenceAccumulator {
+    fault_requested: bool,
+    fault_injections: u64,
+    fault_detected: bool,
+    fault_corrected: bool,
+    outcome_observable: bool,
+}
+
+impl EvidenceAccumulator {
+    /// Begin one experiment-level evidence record.
+    pub fn new(fault_requested: bool) -> Self {
+        Self {
+            fault_requested,
+            fault_injections: 0,
+            fault_detected: false,
+            fault_corrected: false,
+            outcome_observable: false,
+        }
+    }
+
+    /// Merge mitigation observations from one resilient operation.
+    pub fn observe_mitigation(&mut self, metrics: &crate::mitigation::MitigationMetrics) {
+        self.fault_injections = self
+            .fault_injections
+            .saturating_add(metrics.fault_injections);
+
+        self.fault_detected |= metrics.fault_detected;
+        self.fault_corrected |= metrics.fault_corrected;
+    }
+
+    /// Record additional actual injections that are not represented by
+    /// `MitigationMetrics`, such as the current pointwise-multiplication path.
+    pub fn observe_injections(&mut self, count: u64) {
+        self.fault_injections = self.fault_injections.saturating_add(count);
+    }
+
+    /// Record whether corruption remained observable at the workload boundary.
+    pub fn observe_outcome(&mut self, observable: bool) {
+        self.outcome_observable |= observable;
+    }
+
+    /// Finalize the experiment evidence using the canonical classification rule.
+    pub fn finalize(self) -> ExecutionEvidence {
+        ExecutionEvidence::classify(
+            self.fault_requested,
+            self.fault_injections,
+            self.fault_detected,
+            self.fault_corrected,
+            self.outcome_observable,
+        )
+    }
+}
+
 impl ExecutionEvidence {
     /// Construct evidence from independently observed experiment facts.
     ///
@@ -74,6 +142,75 @@ impl ExecutionEvidence {
             outcome_observable,
             execution_valid,
         }
+    }
+}
+
+#[cfg(test)]
+mod accumulator_tests {
+    use super::*;
+    use crate::mitigation::MitigationMetrics;
+
+    #[test]
+    fn accumulator_combines_multiple_operation_observations() {
+        let mut acc = EvidenceAccumulator::new(true);
+
+        let first = MitigationMetrics {
+            fault_injections: 1,
+            fault_detected: true,
+            ..Default::default()
+        };
+
+        let second = MitigationMetrics {
+            fault_injections: 2,
+            fault_corrected: true,
+            ..Default::default()
+        };
+
+        acc.observe_mitigation(&first);
+        acc.observe_mitigation(&second);
+        acc.observe_injections(1);
+        acc.observe_outcome(true);
+
+        let evidence = acc.finalize();
+
+        assert!(evidence.fault_requested);
+        assert_eq!(evidence.fault_injections, 4);
+        assert!(evidence.fault_detected);
+        assert!(evidence.fault_corrected);
+        assert!(evidence.outcome_observable);
+        assert!(evidence.execution_valid);
+    }
+
+    #[test]
+    fn accumulator_preserves_unmatched_fault_invalidity() {
+        let evidence = EvidenceAccumulator::new(true).finalize();
+
+        assert!(evidence.fault_requested);
+        assert_eq!(evidence.fault_injections, 0);
+        assert!(!evidence.execution_valid);
+    }
+
+    #[test]
+    fn accumulator_preserves_clean_no_fault_validity() {
+        let evidence = EvidenceAccumulator::new(false).finalize();
+
+        assert!(!evidence.fault_requested);
+        assert_eq!(evidence.fault_injections, 0);
+        assert!(evidence.execution_valid);
+        assert!(!evidence.outcome_observable);
+    }
+
+    #[test]
+    fn outcome_observability_is_monotonic_within_experiment() {
+        let mut acc = EvidenceAccumulator::new(true);
+
+        acc.observe_injections(1);
+        acc.observe_outcome(true);
+        acc.observe_outcome(false);
+
+        let evidence = acc.finalize();
+
+        assert!(evidence.outcome_observable);
     }
 }
 
