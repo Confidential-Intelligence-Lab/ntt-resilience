@@ -296,8 +296,7 @@ fn main() -> Result<(), String> {
             print_ckks_trace(&result.trace, print_slots);
 
             if validate {
-                let report =
-                    validate_ckks_demo_behavior(fault, result.fault_injections, &result.metrics)?;
+                let report = validate_ckks_demo_behavior(&result.evidence, &result.metrics)?;
                 print_ckks_validation_report(&report);
             }
         }
@@ -341,38 +340,34 @@ struct CkksValidationReport {
 }
 
 fn validate_ckks_demo_behavior(
-    fault: bool,
-    fault_injections: u64,
+    evidence: &crate::evidence::ExecutionEvidence,
     metrics: &crate::metrics::DecodedMetrics,
 ) -> Result<CkksValidationReport, String> {
     let golden_match = metrics.max_abs_error == 0.0 && metrics.rms_error == 0.0;
-    let fault_observed = if fault && fault_injections > 0 {
-        Some(!golden_match)
-    } else {
-        None
-    };
 
-    if !fault && fault_injections != 0 {
+    if !evidence.fault_requested && evidence.fault_injections != 0 {
         return Err(
             "validation failed: fault injection occurred without a requested fault".to_string(),
         );
     }
 
-    if !fault && !golden_match {
+    if !evidence.fault_requested && !golden_match {
         return Err(
             "validation failed: no fault was enabled but decoded output differs from golden output"
                 .to_string(),
         );
     }
 
+    let fault_observed = if evidence.fault_requested && evidence.fault_injections > 0 {
+        Some(evidence.outcome_observable)
+    } else {
+        None
+    };
+
     Ok(CkksValidationReport {
-        // A requested fault that matched no execution event is not an
-        // admissible injection experiment, but it is not a program failure.
-        // Preserve it as a structured validation result so campaign tooling
-        // can distinguish unmatched coordinates from genuine execution errors.
-        execution_valid: !(fault && fault_injections == 0),
-        fault_enabled: fault,
-        fault_injections,
+        execution_valid: evidence.execution_valid,
+        fault_enabled: evidence.fault_requested,
+        fault_injections: evidence.fault_injections,
         golden_match,
         fault_observed,
     })
@@ -427,7 +422,8 @@ mod tests {
 
     #[test]
     fn validation_accepts_no_fault_golden_execution() {
-        let report = validate_ckks_demo_behavior(false, 0, &golden_metrics())
+        let evidence = crate::evidence::ExecutionEvidence::classify(false, 0, false, false, false);
+        let report = validate_ckks_demo_behavior(&evidence, &golden_metrics())
             .expect("no-fault golden execution should validate");
 
         assert!(report.execution_valid);
@@ -439,7 +435,8 @@ mod tests {
 
     #[test]
     fn validation_classifies_requested_but_unmatched_fault_as_invalid_experiment() {
-        let report = validate_ckks_demo_behavior(true, 0, &golden_metrics())
+        let evidence = crate::evidence::ExecutionEvidence::classify(true, 0, false, false, false);
+        let report = validate_ckks_demo_behavior(&evidence, &golden_metrics())
             .expect("unmatched fault request should produce a validation report");
 
         assert!(!report.execution_valid);
@@ -451,7 +448,8 @@ mod tests {
 
     #[test]
     fn validation_accepts_injected_but_masked_fault() {
-        let report = validate_ckks_demo_behavior(true, 1, &golden_metrics())
+        let evidence = crate::evidence::ExecutionEvidence::classify(true, 1, false, false, false);
+        let report = validate_ckks_demo_behavior(&evidence, &golden_metrics())
             .expect("injected but masked fault is a valid experiment");
 
         assert!(report.execution_valid);
@@ -463,7 +461,8 @@ mod tests {
 
     #[test]
     fn validation_accepts_injected_and_observable_fault() {
-        let report = validate_ckks_demo_behavior(true, 1, &observable_metrics())
+        let evidence = crate::evidence::ExecutionEvidence::classify(true, 1, false, false, true);
+        let report = validate_ckks_demo_behavior(&evidence, &observable_metrics())
             .expect("observable injected fault should validate");
 
         assert!(report.execution_valid);

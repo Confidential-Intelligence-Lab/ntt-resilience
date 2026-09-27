@@ -75,21 +75,6 @@ impl ExecutionEvidence {
             execution_valid,
         }
     }
-
-    /// True when at least one requested fault executed but did not remain
-    /// observable at the workload boundary.
-    ///
-    /// This is an observation classification only. It is not a claim of
-    /// resilience, security, detection, or correction.
-    // Transitional R1d-b allowance: this classifier becomes a production
-    // consumer helper when validation/reporting migrates in R1d-c.
-    #[allow(dead_code)]
-    pub fn injected_but_not_observable(&self) -> bool {
-        self.execution_valid
-            && self.fault_requested
-            && self.fault_injections > 0
-            && !self.outcome_observable
-    }
 }
 
 #[cfg(test)]
@@ -103,7 +88,6 @@ mod tests {
         assert!(evidence.execution_valid);
         assert!(!evidence.fault_requested);
         assert_eq!(evidence.fault_injections, 0);
-        assert!(!evidence.injected_but_not_observable());
     }
 
     #[test]
@@ -113,7 +97,6 @@ mod tests {
         assert!(!evidence.execution_valid);
         assert!(evidence.fault_requested);
         assert_eq!(evidence.fault_injections, 0);
-        assert!(!evidence.injected_but_not_observable());
     }
 
     #[test]
@@ -122,7 +105,6 @@ mod tests {
 
         assert!(evidence.execution_valid);
         assert_eq!(evidence.fault_injections, 1);
-        assert!(evidence.injected_but_not_observable());
     }
 
     #[test]
@@ -131,7 +113,6 @@ mod tests {
 
         assert!(evidence.execution_valid);
         assert!(evidence.outcome_observable);
-        assert!(!evidence.injected_but_not_observable());
     }
 
     #[test]

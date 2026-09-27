@@ -76,10 +76,6 @@ pub struct CkksDemoResult {
     pub metrics: DecodedMetrics,
     pub system_metrics: NttSystemMetrics,
     pub mitigation_metrics: MitigationMetrics,
-    pub fault_injections: u64,
-    // Transitional R1d-b allowance: evidence is populated in parallel with
-    // legacy accounting and becomes a production consumer interface in R1d-c.
-    #[allow(dead_code)]
     pub evidence: ExecutionEvidence,
     pub trace: CkksExecutionTrace,
 }
@@ -302,7 +298,6 @@ impl CkksToyContext {
             metrics,
             system_metrics,
             mitigation_metrics,
-            fault_injections,
             evidence,
             trace,
         })
@@ -657,7 +652,7 @@ mod tests {
             .multiply_with_optional_fault(&a, &b, None, None)
             .expect("no-fault CKKS execution should run");
 
-        assert_eq!(result.fault_injections, 0);
+        assert_eq!(result.evidence.fault_injections, 0);
     }
 
     #[test]
@@ -670,7 +665,7 @@ mod tests {
             .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
             .expect("NTT input fault should run");
 
-        assert_eq!(result.fault_injections, 1);
+        assert_eq!(result.evidence.fault_injections, 1);
     }
 
     #[test]
@@ -692,7 +687,7 @@ mod tests {
             )
             .expect("stage-aware NTT input fault should run");
 
-        assert_eq!(result.fault_injections, 1);
+        assert_eq!(result.evidence.fault_injections, 1);
 
         // For N=16, A occupies the first four forward-NTT stage traces.
         assert!(result.trace.correct_ntt_stages.len() >= 4);
@@ -731,7 +726,7 @@ mod tests {
             )
             .expect("operand-A NTT fault should run");
 
-        assert_eq!(result.fault_injections, 1);
+        assert_eq!(result.evidence.fault_injections, 1);
         assert_ne!(result.trace.correct_ntt_a, result.trace.faulty_ntt_a);
         assert_eq!(result.trace.correct_ntt_b, result.trace.faulty_ntt_b);
     }
@@ -755,7 +750,7 @@ mod tests {
             )
             .expect("operand-B NTT fault should run");
 
-        assert_eq!(result.fault_injections, 1);
+        assert_eq!(result.evidence.fault_injections, 1);
         assert_eq!(result.trace.correct_ntt_a, result.trace.faulty_ntt_a);
         assert_ne!(result.trace.correct_ntt_b, result.trace.faulty_ntt_b);
     }
@@ -770,7 +765,7 @@ mod tests {
             .multiply_with_optional_fault(&a, &b, Some("intt"), Some(&fault))
             .expect("iNTT input fault should run");
 
-        assert_eq!(result.fault_injections, 1);
+        assert_eq!(result.evidence.fault_injections, 1);
     }
 
     #[test]
@@ -783,7 +778,7 @@ mod tests {
             .multiply_with_optional_fault(&a, &b, Some("mul"), Some(&fault))
             .expect("pointwise multiplication fault should run");
 
-        assert_eq!(result.fault_injections, 1);
+        assert_eq!(result.evidence.fault_injections, 1);
     }
 
     #[test]
@@ -799,7 +794,7 @@ mod tests {
             .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
             .expect("unmatched coordinate should execute without an injection");
 
-        assert_eq!(result.fault_injections, 0);
+        assert_eq!(result.evidence.fault_injections, 0);
         assert_eq!(result.decoded_correct, result.decoded_faulty);
     }
     #[test]
@@ -811,7 +806,6 @@ mod tests {
             .multiply_with_optional_fault(&a, &b, None, None)
             .expect("no-fault CKKS execution should run");
 
-        assert_eq!(result.fault_injections, result.evidence.fault_injections);
         assert!(!result.evidence.fault_requested);
         assert!(result.evidence.execution_valid);
         assert!(!result.evidence.outcome_observable);
@@ -837,12 +831,14 @@ mod tests {
 
         let golden_match = result.metrics.max_abs_error == 0.0 && result.metrics.rms_error == 0.0;
 
-        assert_eq!(result.fault_injections, result.evidence.fault_injections);
         assert!(result.evidence.fault_requested);
-        assert_eq!(result.evidence.execution_valid, result.fault_injections > 0);
+        assert_eq!(
+            result.evidence.execution_valid,
+            result.evidence.fault_injections > 0
+        );
         assert_eq!(
             result.evidence.outcome_observable,
-            result.fault_injections > 0 && !golden_match
+            result.evidence.fault_injections > 0 && !golden_match
         );
         assert_eq!(
             result.evidence.fault_detected,
@@ -866,7 +862,7 @@ mod tests {
             .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
             .expect("unmatched fault experiment should execute");
 
-        assert_eq!(result.fault_injections, 0);
+        assert_eq!(result.evidence.fault_injections, 0);
         assert!(result.evidence.fault_requested);
         assert!(!result.evidence.execution_valid);
         assert!(!result.evidence.outcome_observable);
