@@ -123,7 +123,9 @@ fn is_prime_u64(n: u64) -> bool {
 /// element that already has order 2N, we project arbitrary field elements into
 /// the order-2N subgroup:
 ///
-///     root = h^((q-1)/order) mod q
+/// ```text
+/// root = h^((q-1)/order) mod q
+/// ```
 ///
 /// For power-of-two `order`, exact order can be tested with one additional
 /// check: root^(order/2) != 1.  This is dramatically faster for 60-62 bit q.

@@ -5,16 +5,16 @@
 use num_complex::Complex64;
 use std::f64::consts::PI;
 
-use crate::evidence::ExecutionEvidence;
-use crate::fault::FaultSpec;
-use crate::metrics::{decoded_metrics, DecodedMetrics};
-use crate::mitigation::{MitigationMetrics, MitigationOptions};
-use crate::modarith::{centered, from_centered, mul_mod};
-use crate::ntt::{
+use ntt_resilience::evidence::ExecutionEvidence;
+use ntt_resilience::fault::FaultSpec;
+use ntt_resilience::metrics::{decoded_metrics, DecodedMetrics};
+use ntt_resilience::mitigation::{MitigationMetrics, MitigationOptions};
+use ntt_resilience::modarith::{centered, from_centered, mul_mod};
+use ntt_resilience::ntt::{
     execute_ntt, execute_ntt_pointwise_mul, NttDirection, NttExecutionConfig, NttImplementation,
     NttPointwiseMulConfig, NttSystemMetrics, StageTrace,
 };
-use crate::params::RingParams;
+use ntt_resilience::params::RingParams;
 
 #[derive(Debug, Clone)]
 pub struct CkksToyContext {
@@ -316,7 +316,7 @@ impl CkksToyContext {
         let n = self.params.n;
         let q = self.params.modulus;
         let psi = self.params.primitive_2n_root;
-        let psi_inv = crate::modarith::inv_mod(psi, q);
+        let psi_inv = ntt_resilience::modarith::inv_mod(psi, q);
 
         let ntt_injections_before = mitigation_metrics.fault_injections;
         let mut direct_fault_injections = 0u64;
@@ -325,8 +325,8 @@ impl CkksToyContext {
         let mut tb = vec![0u64; n];
 
         for i in 0..n {
-            ta[i] = mul_mod(a[i], crate::modarith::pow_mod(psi, i as u64, q), q);
-            tb[i] = mul_mod(b[i], crate::modarith::pow_mod(psi, i as u64, q), q);
+            ta[i] = mul_mod(a[i], ntt_resilience::modarith::pow_mod(psi, i as u64, q), q);
+            tb[i] = mul_mod(b[i], ntt_resilience::modarith::pow_mod(psi, i as u64, q), q);
         }
 
         let ntt_trace_enabled = trace_options.ntt;
@@ -338,7 +338,7 @@ impl CkksToyContext {
 
         let a_fault = if fault_op == Some("ntt")
             && fault_spec
-                .map(|f| f.operand == crate::fault::FaultOperand::A)
+                .map(|f| f.operand == ntt_resilience::fault::FaultOperand::A)
                 .unwrap_or(false)
         {
             fault_spec
@@ -364,7 +364,7 @@ impl CkksToyContext {
 
         let b_fault = if fault_op == Some("ntt")
             && fault_spec
-                .map(|f| f.operand == crate::fault::FaultOperand::B)
+                .map(|f| f.operand == ntt_resilience::fault::FaultOperand::B)
                 .unwrap_or(false)
         {
             fault_spec
@@ -429,7 +429,11 @@ impl CkksToyContext {
         )?;
 
         for i in 0..n {
-            c[i] = mul_mod(c[i], crate::modarith::pow_mod(psi_inv, i as u64, q), q);
+            c[i] = mul_mod(
+                c[i],
+                ntt_resilience::modarith::pow_mod(psi_inv, i as u64, q),
+                q,
+            );
         }
 
         let mut combined_ntt_stages = ntt_stages;
@@ -492,7 +496,7 @@ pub fn demo_slots(n: usize) -> (Vec<Complex64>, Vec<Complex64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fault::{FaultOperand, FaultSpec};
+    use ntt_resilience::fault::{FaultOperand, FaultSpec};
 
     fn ctx() -> CkksToyContext {
         let params = RingParams::new(16, 24).expect("valid test params");
@@ -604,11 +608,11 @@ mod tests {
     fn ckks_demo_butterfly_check_records_checks() {
         let params = RingParams::new(16, 24).expect("valid test params");
         let ctx = CkksToyContext::new_with_impl(params, 10, NttImplementation::Radix2)
-            .with_mitigation(crate::mitigation::MitigationOptions {
-                kind: crate::mitigation::MitigationKind::ButterflyCheck,
-                action: crate::mitigation::MitigationAction::DetectOnly,
+            .with_mitigation(ntt_resilience::mitigation::MitigationOptions {
+                kind: ntt_resilience::mitigation::MitigationKind::ButterflyCheck,
+                action: ntt_resilience::mitigation::MitigationAction::DetectOnly,
                 max_retries: 1,
-                checksum_mode: crate::mitigation::ChecksumMode::Sum,
+                checksum_mode: ntt_resilience::mitigation::ChecksumMode::Sum,
             });
         let (a, b) = demo_slots(ctx.params.n);
         let result = ctx
@@ -622,11 +626,11 @@ mod tests {
     fn mitigation_ctx() -> CkksToyContext {
         let params = RingParams::new(16, 24).expect("valid test params");
         CkksToyContext::new_with_impl(params, 10, NttImplementation::Radix2).with_mitigation(
-            crate::mitigation::MitigationOptions {
-                kind: crate::mitigation::MitigationKind::ButterflyCheck,
-                action: crate::mitigation::MitigationAction::DetectOnly,
+            ntt_resilience::mitigation::MitigationOptions {
+                kind: ntt_resilience::mitigation::MitigationKind::ButterflyCheck,
+                action: ntt_resilience::mitigation::MitigationAction::DetectOnly,
                 max_retries: 1,
-                checksum_mode: crate::mitigation::ChecksumMode::Sum,
+                checksum_mode: ntt_resilience::mitigation::ChecksumMode::Sum,
             },
         )
     }
@@ -636,7 +640,7 @@ mod tests {
         stage: usize,
         slot: usize,
         bit: u32,
-        site: crate::fault::FaultSite,
+        site: ntt_resilience::fault::FaultSite,
     ) -> FaultSpec {
         let mut fault = FaultSpec::new(operand, stage, slot, bit);
         fault.site = site;
@@ -659,7 +663,13 @@ mod tests {
     fn ntt_input_fault_records_exactly_one_injection() {
         let ctx = ctx();
         let (a, b) = demo_slots(ctx.params.n);
-        let fault = fault_at(FaultOperand::A, 0, 0, 0, crate::fault::FaultSite::Input);
+        let fault = fault_at(
+            FaultOperand::A,
+            0,
+            0,
+            0,
+            ntt_resilience::fault::FaultSite::Input,
+        );
 
         let result = ctx
             .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
@@ -672,7 +682,13 @@ mod tests {
     fn ntt_input_fault_respects_requested_stage() {
         let ctx = ctx();
         let (a, b) = demo_slots(ctx.params.n);
-        let fault = fault_at(FaultOperand::A, 3, 0, 0, crate::fault::FaultSite::Input);
+        let fault = fault_at(
+            FaultOperand::A,
+            3,
+            0,
+            0,
+            ntt_resilience::fault::FaultSite::Input,
+        );
 
         let result = ctx
             .multiply_with_optional_fault_traced(
@@ -711,7 +727,13 @@ mod tests {
     fn ntt_arithmetic_fault_is_routed_only_to_operand_a() {
         let ctx = mitigation_ctx();
         let (a, b) = demo_slots(ctx.params.n);
-        let fault = fault_at(FaultOperand::A, 0, 1, 0, crate::fault::FaultSite::MulOutput);
+        let fault = fault_at(
+            FaultOperand::A,
+            0,
+            1,
+            0,
+            ntt_resilience::fault::FaultSite::MulOutput,
+        );
 
         let result = ctx
             .multiply_with_optional_fault_traced(
@@ -735,7 +757,13 @@ mod tests {
     fn ntt_arithmetic_fault_is_routed_only_to_operand_b() {
         let ctx = mitigation_ctx();
         let (a, b) = demo_slots(ctx.params.n);
-        let fault = fault_at(FaultOperand::B, 0, 1, 0, crate::fault::FaultSite::MulOutput);
+        let fault = fault_at(
+            FaultOperand::B,
+            0,
+            1,
+            0,
+            ntt_resilience::fault::FaultSite::MulOutput,
+        );
 
         let result = ctx
             .multiply_with_optional_fault_traced(
@@ -759,7 +787,13 @@ mod tests {
     fn intt_input_fault_records_exactly_one_injection() {
         let ctx = ctx();
         let (a, b) = demo_slots(ctx.params.n);
-        let fault = fault_at(FaultOperand::A, 0, 0, 4, crate::fault::FaultSite::Input);
+        let fault = fault_at(
+            FaultOperand::A,
+            0,
+            0,
+            4,
+            ntt_resilience::fault::FaultSite::Input,
+        );
 
         let result = ctx
             .multiply_with_optional_fault(&a, &b, Some("intt"), Some(&fault))
@@ -788,7 +822,13 @@ mod tests {
 
         // At radix-2 stage 0, MulOutput is produced at the hi positions:
         // 1, 3, 5, ... . Slot 0 therefore cannot match a MulOutput event.
-        let fault = fault_at(FaultOperand::A, 0, 0, 0, crate::fault::FaultSite::MulOutput);
+        let fault = fault_at(
+            FaultOperand::A,
+            0,
+            0,
+            0,
+            ntt_resilience::fault::FaultSite::MulOutput,
+        );
 
         let result = ctx
             .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
@@ -856,7 +896,13 @@ mod tests {
         let (a, b) = demo_slots(ctx.params.n);
 
         // Stage-0 MulOutput is produced only at hi positions 1, 3, 5, ...
-        let fault = fault_at(FaultOperand::A, 0, 0, 0, crate::fault::FaultSite::MulOutput);
+        let fault = fault_at(
+            FaultOperand::A,
+            0,
+            0,
+            0,
+            ntt_resilience::fault::FaultSite::MulOutput,
+        );
 
         let result = ctx
             .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))
@@ -872,16 +918,16 @@ mod tests {
     fn execution_evidence_preserves_detection_and_recovery() {
         let params = RingParams::new(16, 24).expect("valid test params");
         let ctx = CkksToyContext::new_with_impl(params, 10, NttImplementation::Radix2)
-            .with_mitigation(crate::mitigation::MitigationOptions {
-                kind: crate::mitigation::MitigationKind::ButterflyCheck,
-                action: crate::mitigation::MitigationAction::Recompute,
+            .with_mitigation(ntt_resilience::mitigation::MitigationOptions {
+                kind: ntt_resilience::mitigation::MitigationKind::ButterflyCheck,
+                action: ntt_resilience::mitigation::MitigationAction::Recompute,
                 max_retries: 1,
-                checksum_mode: crate::mitigation::ChecksumMode::Sum,
+                checksum_mode: ntt_resilience::mitigation::ChecksumMode::Sum,
             });
 
         let (a, b) = demo_slots(ctx.params.n);
         let mut fault = FaultSpec::new(FaultOperand::A, 0, 1, 0);
-        fault.site = crate::fault::FaultSite::MulOutput;
+        fault.site = ntt_resilience::fault::FaultSite::MulOutput;
 
         let result = ctx
             .multiply_with_optional_fault(&a, &b, Some("ntt"), Some(&fault))

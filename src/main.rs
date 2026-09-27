@@ -1,19 +1,12 @@
 mod ckks;
-mod evidence;
-mod fault;
-mod metrics;
-mod mitigation;
-mod modarith;
-mod ntt;
-mod params;
-mod validation;
 mod visualize;
 
+use ntt_resilience::{
+    ChecksumMode, FaultOperand, FaultSite, FaultSpec, MitigationAction, MitigationKind,
+    MitigationOptions, NttImplementation, RingParams,
+};
+
 use crate::ckks::{demo_slots, CkksToyContext, CkksTraceOptions};
-use crate::fault::{FaultOperand, FaultSite, FaultSpec};
-use crate::mitigation::{ChecksumMode, MitigationAction, MitigationKind, MitigationOptions};
-use crate::ntt::NttImplementation;
-use crate::params::RingParams;
 use crate::visualize::{
     print_ckks_trace, print_complex_slots, print_decoded_comparison, print_decoded_metrics,
     print_mitigation_metrics, print_ring,
@@ -305,7 +298,7 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-fn print_system_metrics(metrics: &crate::ntt::NttSystemMetrics) {
+fn print_system_metrics(metrics: &ntt_resilience::NttSystemMetrics) {
     println!("================ Systems Metrics ====================");
     match metrics.ntt_impl {
         Some(implementation) => println!("NTT implementation: {}", implementation),
@@ -340,8 +333,8 @@ struct CkksValidationReport {
 }
 
 fn validate_ckks_demo_behavior(
-    evidence: &crate::evidence::ExecutionEvidence,
-    metrics: &crate::metrics::DecodedMetrics,
+    evidence: &ntt_resilience::ExecutionEvidence,
+    metrics: &ntt_resilience::metrics::DecodedMetrics,
 ) -> Result<CkksValidationReport, String> {
     let golden_match = metrics.max_abs_error == 0.0 && metrics.rms_error == 0.0;
 
@@ -398,8 +391,8 @@ fn print_ckks_validation_report(report: &CkksValidationReport) {
 mod tests {
     use super::*;
 
-    fn golden_metrics() -> crate::metrics::DecodedMetrics {
-        crate::metrics::DecodedMetrics {
+    fn golden_metrics() -> ntt_resilience::metrics::DecodedMetrics {
+        ntt_resilience::metrics::DecodedMetrics {
             slot_count: 1,
             max_abs_error: 0.0,
             mean_abs_error: 0.0,
@@ -409,8 +402,8 @@ mod tests {
         }
     }
 
-    fn observable_metrics() -> crate::metrics::DecodedMetrics {
-        crate::metrics::DecodedMetrics {
+    fn observable_metrics() -> ntt_resilience::metrics::DecodedMetrics {
+        ntt_resilience::metrics::DecodedMetrics {
             slot_count: 1,
             max_abs_error: 1.0,
             mean_abs_error: 1.0,
@@ -422,7 +415,7 @@ mod tests {
 
     #[test]
     fn validation_accepts_no_fault_golden_execution() {
-        let evidence = crate::evidence::ExecutionEvidence::classify(false, 0, false, false, false);
+        let evidence = ntt_resilience::ExecutionEvidence::classify(false, 0, false, false, false);
         let report = validate_ckks_demo_behavior(&evidence, &golden_metrics())
             .expect("no-fault golden execution should validate");
 
@@ -435,7 +428,7 @@ mod tests {
 
     #[test]
     fn validation_classifies_requested_but_unmatched_fault_as_invalid_experiment() {
-        let evidence = crate::evidence::ExecutionEvidence::classify(true, 0, false, false, false);
+        let evidence = ntt_resilience::ExecutionEvidence::classify(true, 0, false, false, false);
         let report = validate_ckks_demo_behavior(&evidence, &golden_metrics())
             .expect("unmatched fault request should produce a validation report");
 
@@ -448,7 +441,7 @@ mod tests {
 
     #[test]
     fn validation_accepts_injected_but_masked_fault() {
-        let evidence = crate::evidence::ExecutionEvidence::classify(true, 1, false, false, false);
+        let evidence = ntt_resilience::ExecutionEvidence::classify(true, 1, false, false, false);
         let report = validate_ckks_demo_behavior(&evidence, &golden_metrics())
             .expect("injected but masked fault is a valid experiment");
 
@@ -461,7 +454,7 @@ mod tests {
 
     #[test]
     fn validation_accepts_injected_and_observable_fault() {
-        let evidence = crate::evidence::ExecutionEvidence::classify(true, 1, false, false, true);
+        let evidence = ntt_resilience::ExecutionEvidence::classify(true, 1, false, false, true);
         let report = validate_ckks_demo_behavior(&evidence, &observable_metrics())
             .expect("observable injected fault should validate");
 

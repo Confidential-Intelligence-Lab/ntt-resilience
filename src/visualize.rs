@@ -1,8 +1,8 @@
 use crate::ckks::CkksExecutionTrace;
-use crate::metrics::DecodedMetrics;
-use crate::mitigation::MitigationMetrics;
-use crate::ntt::StageTrace;
-use crate::params::RingParams;
+use ntt_resilience::metrics::DecodedMetrics;
+use ntt_resilience::mitigation::MitigationMetrics;
+use ntt_resilience::ntt::StageTrace;
+use ntt_resilience::params::RingParams;
 use num_complex::Complex64;
 
 const RED: &str = "\x1b[31m";
