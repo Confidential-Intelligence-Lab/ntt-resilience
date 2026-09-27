@@ -8,6 +8,14 @@ from collections import defaultdict
 from pathlib import Path
 
 
+
+def evidence_value(row, canonical, legacy):
+    """Read canonical evidence, falling back to historical CSV names."""
+    value = row.get(canonical)
+    if value is not None and str(value).strip() != "":
+        return value
+    return row.get(legacy, "")
+
 def as_float(value):
     if value is None:
         return None
@@ -104,21 +112,21 @@ def admissible_injections(df, fields):
     valid = [
         row
         for row in df
-        if row.get("fault_observed", "").strip().upper() != "ERROR"
+        if evidence_value(row, "outcome_observable", "fault_observed").strip().upper() != "ERROR"
     ]
     return valid, "legacy"
 
 
 def observed(row):
-    return row.get("fault_observed", "").strip().upper() == "PASS"
+    return evidence_value(row, "outcome_observable", "fault_observed").strip().upper() == "PASS"
 
 
 def detected(row):
-    return row.get("detected", "").strip().lower() == "yes"
+    return evidence_value(row, "fault_detected", "detected").strip().lower() == "yes"
 
 
 def corrected(row):
-    return row.get("corrected", "").strip().lower() == "yes"
+    return evidence_value(row, "fault_corrected", "corrected").strip().lower() == "yes"
 
 
 def summarize_group(rows):

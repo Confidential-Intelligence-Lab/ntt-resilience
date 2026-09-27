@@ -23,9 +23,9 @@ def parse(out,err,code):
       "execution_valid":r"Execution valid:\s*([A-Za-z/]+)",
       "fault_injections":r"Fault injections:\s*([0-9]+)",
       "golden_match":r"Golden match:\s*([A-Za-z/]+)",
-      "fault_observed":r"Fault observed:\s*([A-Za-z/]+)",
-      "detected":r"Fault detected:\s*([A-Za-z/]+)",
-      "corrected":r"Fault corrected:\s*([A-Za-z/]+)",
+      "outcome_observable":r"Fault observed:\s*([A-Za-z/]+)",
+      "fault_detected":r"Fault detected:\s*([A-Za-z/]+)",
+      "fault_corrected":r"Fault corrected:\s*([A-Za-z/]+)",
       "rms_error":r"RMS error:\s*([-+0-9.eE]+)",
       "relative_l2_error":r"Relative L2 error:\s*([-+0-9.eE]+)",
       "max_abs_error":r"Max abs error:\s*([-+0-9.eE]+)",
@@ -53,6 +53,19 @@ def parse(out,err,code):
         if m: row[k]=m.group(1)
     if code!=0: row["stderr_tail"]=err[-1000:]
     return row
+
+def add_legacy_evidence_aliases(row):
+    """Preserve historical campaign evidence column names."""
+    aliases = {
+        "fault_requested": "fault_enabled",
+        "outcome_observable": "fault_observed",
+        "fault_detected": "detected",
+        "fault_corrected": "corrected",
+    }
+    for canonical, legacy in aliases.items():
+        if canonical in row:
+            row[legacy] = row[canonical]
+
 
 def cmd(
     args,
@@ -114,8 +127,8 @@ def main():
     out=Path(args.output); out.parent.mkdir(parents=True,exist_ok=True)
     fields=["n","bits","scale_bits","ntt_impl","fault_enabled","fault_op","fault_operand",
             "fault_site","fault_stage","fault_slot","fault_bit","mitigation","mitigation_action",
-            "checksum_mode","command","returncode","execution_valid","fault_injections",
-            "golden_match","fault_observed","detected","corrected",
+            "checksum_mode","command","returncode","fault_requested","fault_injections","execution_valid",
+            "fault_detected","fault_corrected","outcome_observable","golden_match","fault_enabled","fault_observed","detected","corrected",
             "rms_error","relative_l2_error","max_abs_error","mean_abs_error",
             "snr_db","elapsed_ntt_ns","scratch_bytes","checks_performed","check_failures",
             "stage_checks","stage_failures","s1_failures","s2_failures","recomputations",
@@ -132,9 +145,9 @@ def main():
              if args.include_baseline:
               c=cmd(args,n,impl,mit,mode,True)
               row={"n":n,"bits":args.bits,"scale_bits":args.scale_bits,"ntt_impl":impl,
-                   "fault_enabled":"false","mitigation":mit,"mitigation_action":args.mitigation_action,
+                   "fault_requested":"false","fault_enabled":"false","mitigation":mit,"mitigation_action":args.mitigation_action,
                    "checksum_mode":mode,"command":" ".join(c)}
-              row.update(run(c,args.dry_run)); w.writerow(row); count+=1
+              row.update(run(c,args.dry_run)); add_legacy_evidence_aliases(row); w.writerow(row); count+=1
               if args.limit and count>=args.limit: return
              for op in csvs(args.fault_ops):
               op_operands=csvs(args.operands) if op=="mul" else ["a"]
@@ -145,12 +158,12 @@ def main():
                   for bit in ints(args.fault_bits):
                    c=cmd(args,n,impl,mit,mode,False,op,operand,site,st,sl,bit)
                    row={"n":n,"bits":args.bits,"scale_bits":args.scale_bits,"ntt_impl":impl,
-                        "fault_enabled":"true","fault_op":op,"fault_operand":operand,
+                        "fault_requested":"true","fault_enabled":"true","fault_op":op,"fault_operand":operand,
                         "fault_site":site,
                         "fault_stage":st,"fault_slot":sl,"fault_bit":bit,"mitigation":mit,
                         "mitigation_action":args.mitigation_action,"checksum_mode":mode,
                         "command":" ".join(c)}
-                   row.update(run(c,args.dry_run)); w.writerow(row); count+=1
+                   row.update(run(c,args.dry_run)); add_legacy_evidence_aliases(row); w.writerow(row); count+=1
                    if args.limit and count>=args.limit: return
     print(f"Wrote {count} rows to {out}")
 if __name__=="__main__": main()

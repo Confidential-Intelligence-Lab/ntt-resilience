@@ -8,6 +8,14 @@ from collections import defaultdict
 from pathlib import Path
 
 
+
+def evidence_value(row, canonical, legacy):
+    """Read canonical evidence, falling back to historical CSV names."""
+    value = row.get(canonical)
+    if value is not None and str(value).strip() != "":
+        return value
+    return row.get(legacy, "")
+
 def as_float(value):
     try:
         return float(value)
@@ -45,20 +53,20 @@ def admissible(row, has_provenance):
             return False
 
     # Backward compatibility for historical campaign CSVs.
-    return row.get("fault_observed", "").strip().upper() != "ERROR"
+    return evidence_value(row, "outcome_observable", "fault_observed").strip().upper() != "ERROR"
 
 
 def summarize_group(rows):
     observed = [
-        r.get("fault_observed", "").strip().upper() == "PASS"
+        evidence_value(r, "outcome_observable", "fault_observed").strip().upper() == "PASS"
         for r in rows
     ]
     detected = [
-        r.get("detected", "").strip().lower() == "yes"
+        evidence_value(r, "fault_detected", "detected").strip().lower() == "yes"
         for r in rows
     ]
     corrected = [
-        r.get("corrected", "").strip().lower() == "yes"
+        evidence_value(r, "fault_corrected", "corrected").strip().lower() == "yes"
         for r in rows
     ]
 

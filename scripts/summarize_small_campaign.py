@@ -8,6 +8,14 @@ from collections import defaultdict
 from pathlib import Path
 
 
+
+def evidence_value(row, canonical, legacy):
+    """Read canonical evidence, falling back to historical CSV names."""
+    value = row.get(canonical)
+    if value is not None and str(value).strip() != "":
+        return value
+    return row.get(legacy, "")
+
 def as_float(value):
     if value is None:
         return None
@@ -90,7 +98,7 @@ def admissible_injections(rows, fields):
     valid = [
         row
         for row in rows
-        if row.get("fault_observed", "").strip().upper() != "ERROR"
+        if evidence_value(row, "outcome_observable", "fault_observed").strip().upper() != "ERROR"
     ]
 
     return valid, "legacy"
@@ -107,9 +115,9 @@ def group_rows(rows, cols):
 
 
 def summarize_group(rows):
-    observed = [pass_bool(r.get("fault_observed", "")) for r in rows]
-    detected = [yes_bool(r.get("detected", "")) for r in rows]
-    corrected = [yes_bool(r.get("corrected", "")) for r in rows]
+    observed = [pass_bool(evidence_value(r, "outcome_observable", "fault_observed")) for r in rows]
+    detected = [yes_bool(evidence_value(r, "fault_detected", "detected")) for r in rows]
+    corrected = [yes_bool(evidence_value(r, "fault_corrected", "corrected")) for r in rows]
 
     obs_indices = [i for i, value in enumerate(observed) if value]
     det_indices = [i for i, value in enumerate(detected) if value]
