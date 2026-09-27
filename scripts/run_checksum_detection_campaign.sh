@@ -5,7 +5,7 @@ mkdir -p results/large_ring_campaign
 TS="$(date +%Y%m%d_%H%M%S)"
 OUT="results/large_ring_campaign/detection_checksum_fixed_${TS}.csv"
 
-echo "n,bits,mitigation,checksum_mode,action,fault_op,fault_site,stage,slot,bit,seed,returncode,execution_valid,fault_injections,fault_observed,golden_match,detected,corrected,max_abs_error,mean_abs_error,rms_error,relative_l2_error,snr_db,checks_performed,check_failures,stage_checks,stage_failures,s1_failures,s2_failures,recomputations,elapsed_ntt_ns,mitigation_time_ns,mod_adds,mod_subs,mod_muls,memory_reads,memory_writes" > "$OUT"
+echo "n,bits,mitigation,checksum_mode,action,fault_op,fault_site,stage,slot,bit,seed,returncode,fault_requested,fault_injections,execution_valid,fault_detected,fault_corrected,outcome_observable,golden_match,fault_observed,detected,corrected,max_abs_error,mean_abs_error,rms_error,relative_l2_error,snr_db,checks_performed,check_failures,stage_checks,stage_failures,s1_failures,s2_failures,recomputations,elapsed_ntt_ns,mitigation_time_ns,mod_adds,mod_subs,mod_muls,memory_reads,memory_writes" > "$OUT"
 
 NS=(64 128)
 BITS_LIST=(28)
@@ -83,12 +83,18 @@ PY
                         continue
                       fi
 
+                      fault_requested="true"
                       execution_valid="$(extract_last "$result" "Execution valid:")"
                       fault_injections="$(extract_metric_value "$result" "Fault injections")"
-                      fault_observed="$(extract_last "$result" "Fault observed:")"
+                      outcome_observable="$(extract_last "$result" "Fault observed:")"
                       golden_match="$(extract_last "$result" "Golden match:")"
-                      detected="$(extract_last "$result" "Fault detected:")"
-                      corrected="$(extract_last "$result" "Fault corrected:")"
+                      fault_detected="$(extract_last "$result" "Fault detected:")"
+                      fault_corrected="$(extract_last "$result" "Fault corrected:")"
+
+                      # Historical aliases retained for compatibility.
+                      fault_observed="$outcome_observable"
+                      detected="$fault_detected"
+                      corrected="$fault_corrected"
 
                       max_abs_error="$(extract_metric_value "$result" "Max abs error")"
                       mean_abs_error="$(extract_metric_value "$result" "Mean abs error")"
@@ -112,7 +118,7 @@ PY
                       reads="$(extract_metric_value "$result" "Memory reads")"
                       writes="$(extract_metric_value "$result" "Memory writes")"
 
-                      echo "$n,$bits,$mitigation,$checksum_mode,$action,$fault_op,$site,$stage,$slot,$bit,$seed,$status,$execution_valid,$fault_injections,$fault_observed,$golden_match,$detected,$corrected,$max_abs_error,$mean_abs_error,$rms_error,$relative_l2_error,$snr_db,$checks,$failures,$stage_checks,$stage_failures,$s1_failures,$s2_failures,$recomputations,$elapsed,$mitigation_ns,$adds,$subs,$muls,$reads,$writes" >> "$OUT"
+                      echo "$n,$bits,$mitigation,$checksum_mode,$action,$fault_op,$site,$stage,$slot,$bit,$seed,$status,$fault_requested,$fault_injections,$execution_valid,$fault_detected,$fault_corrected,$outcome_observable,$golden_match,$fault_observed,$detected,$corrected,$max_abs_error,$mean_abs_error,$rms_error,$relative_l2_error,$snr_db,$checks,$failures,$stage_checks,$stage_failures,$s1_failures,$s2_failures,$recomputations,$elapsed,$mitigation_ns,$adds,$subs,$muls,$reads,$writes" >> "$OUT"
                     done
                   done
                 done

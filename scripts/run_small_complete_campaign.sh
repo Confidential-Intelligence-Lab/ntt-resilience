@@ -19,7 +19,7 @@ RUN_ID=0
 echo "Expected total runs: $TOTAL_RUNS"
 echo "Output CSV: $OUT"
 
-echo "run_id,total_runs,n,bits,mitigation,action,fault_op,fault_site,stage,slot,bit,fault_observed,golden_match,detected,corrected,max_abs_error,mean_abs_error,rms_error,relative_l2_error,snr_db,checks_performed,check_failures,stage_checks,stage_failures,s1_failures,s2_failures,recomputations,elapsed_ntt_ns,mitigation_time_ns,mod_adds,mod_subs,mod_muls,memory_reads,memory_writes" > "$OUT"
+echo "run_id,total_runs,n,bits,mitigation,action,fault_op,fault_site,stage,slot,bit,returncode,fault_requested,fault_injections,execution_valid,fault_detected,fault_corrected,outcome_observable,golden_match,fault_observed,detected,corrected,max_abs_error,mean_abs_error,rms_error,relative_l2_error,snr_db,checks_performed,check_failures,stage_checks,stage_failures,s1_failures,s2_failures,recomputations,elapsed_ntt_ns,mitigation_time_ns,mod_adds,mod_subs,mod_muls,memory_reads,memory_writes" > "$OUT"
 
 extract_metric_value() {
   local text="$1"; local label="$2"
@@ -89,10 +89,18 @@ PY
                     continue
                   fi
 
-                  fault_observed="$(extract_last "$result" "Fault observed:")"
+                  fault_requested="true"
+                  execution_valid="$(extract_last "$result" "Execution valid:")"
+                  fault_injections="$(extract_metric_value "$result" "Fault injections")"
+                  outcome_observable="$(extract_last "$result" "Fault observed:")"
                   golden_match="$(extract_last "$result" "Golden match:")"
-                  detected="$(extract_last "$result" "Fault detected:")"
-                  corrected="$(extract_last "$result" "Fault corrected:")"
+                  fault_detected="$(extract_last "$result" "Fault detected:")"
+                  fault_corrected="$(extract_last "$result" "Fault corrected:")"
+
+                  # Historical aliases retained for compatibility.
+                  fault_observed="$outcome_observable"
+                  detected="$fault_detected"
+                  corrected="$fault_corrected"
                   max_abs_error="$(extract_metric_value "$result" "Max abs error")"
                   mean_abs_error="$(extract_metric_value "$result" "Mean abs error")"
                   rms_error="$(extract_metric_value "$result" "RMS error")"
@@ -113,7 +121,7 @@ PY
                   reads="$(extract_metric_value "$result" "Memory reads")"
                   writes="$(extract_metric_value "$result" "Memory writes")"
 
-                  echo "$RUN_ID,$TOTAL_RUNS,$n,$bits,$mitigation,$action,$fault_op,$site,$stage,$slot,$bit,$fault_observed,$golden_match,$detected,$corrected,$max_abs_error,$mean_abs_error,$rms_error,$relative_l2_error,$snr_db,$checks,$failures,$stage_checks,$stage_failures,$s1_failures,$s2_failures,$recomputations,$elapsed,$mitigation_ns,$adds,$subs,$muls,$reads,$writes" >> "$OUT"
+                  echo "$RUN_ID,$TOTAL_RUNS,$n,$bits,$mitigation,$action,$fault_op,$site,$stage,$slot,$bit,$status,$fault_requested,$fault_injections,$execution_valid,$fault_detected,$fault_corrected,$outcome_observable,$golden_match,$fault_observed,$detected,$corrected,$max_abs_error,$mean_abs_error,$rms_error,$relative_l2_error,$snr_db,$checks,$failures,$stage_checks,$stage_failures,$s1_failures,$s2_failures,$recomputations,$elapsed,$mitigation_ns,$adds,$subs,$muls,$reads,$writes" >> "$OUT"
                 done
               done
             done
